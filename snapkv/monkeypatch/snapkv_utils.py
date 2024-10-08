@@ -21,17 +21,15 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 class SnapKVCluster():
-    def __init__(self, window_size = 64, max_capacity_prompt = 256 + 64, kernel_size = 5, pooling = 'avgpool'):
+    def __init__(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'avgpool'):
         self.window_size = window_size
-        self.max_capacity_prompt = max_capacity_prompt
-        assert self.max_capacity_prompt - self.window_size > 0
+        self.prompt_sparsity_ratio = prompt_sparsity_ratio
         self.kernel_size = kernel_size
         self.pooling = pooling
 
-    def reset(self, window_size = 64, max_capacity_prompt = 256 + 64, kernel_size = 5, pooling = 'avgpool'):
+    def reset(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'avgpool'):
         self.window_size = window_size
-        self.max_capacity_prompt = max_capacity_prompt
-        assert self.max_capacity_prompt - self.window_size > 0
+        self.prompt_sparsity_ratio = prompt_sparsity_ratio
         self.kernel_size = kernel_size
         self.pooling = pooling
 
@@ -39,7 +37,7 @@ class SnapKVCluster():
         # check if prefix phase
         assert key_states.shape[-2] == query_states.shape[-2]
         bsz, num_heads, q_len, head_dim = query_states.shape
-        if q_len < self.max_capacity_prompt:
+        if self.prompt_sparsity_ratio * q_len < self.window_size:
             return key_states, value_states
         else:
             attn_weights = torch.matmul(query_states[..., -self.window_size:, :], key_states.transpose(2, 3)) / math.sqrt(head_dim)
@@ -59,7 +57,7 @@ class SnapKVCluster():
                 attn_cache = F.max_pool1d(attn_weights_sum, kernel_size = self.kernel_size, padding=self.kernel_size//2, stride=1)
             else:
                 raise ValueError('Pooling method not supported')
-            indices = attn_cache.topk(self.max_capacity_prompt - self.window_size, dim=-1).indices
+            indices = attn_cache.topk(self.prompt_sparsity_ratio * q_len - self.window_size, dim=-1).indices
             indices = indices.unsqueeze(-1).expand(-1, -1, -1, head_dim)
             k_past_compress = key_states[:, :, :-self.window_size, :].gather(dim = 2, index = indices)
             v_past_compress = value_states[:, :, :-self.window_size, :].gather(dim = 2, index = indices)
@@ -73,15 +71,15 @@ def init_snapkv(self):
     if not hasattr(self, "kv_cluster"):
         if not hasattr(self.config, 'window_size'):
             self.config.window_size = 32
-        if not hasattr(self.config, 'max_capacity_prompt'):
-            self.config.max_capacity_prompt = 2048
+        if not hasattr(self.config, 'prompt_sparsity_ratio'):
+            self.config.max_capacity_prompt = 0.25
         if not hasattr(self.config, 'kernel_size'):
             self.config.kernel_size = 5
         if not hasattr(self.config, 'pooling'):
             self.config.pooling = 'avgpool'
     self.kv_cluster = SnapKVCluster( 
         window_size = self.config.window_size, 
-        max_capacity_prompt = self.config.max_capacity_prompt, 
+        prompt_sparsity_ratio = self.config.prompt_sparsity_ratio,
         kernel_size = self.config.kernel_size,
         pooling = self.config.pooling
         )

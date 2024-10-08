@@ -16,7 +16,6 @@ def parse_args(args=None):
         "mistral-7B-instruct-v0.2", "mistral-7B-instruct-v0.1", "llama-2-7B-32k-instruct", "mixtral-8x7B-instruct-v0.1","lwm-text-chat-1m", "lwm-text-1m"])
     parser.add_argument('--compress_args_path', type=str, default=None, help="Path to the compress args")
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
-    parser.add_argument('--dataset', type=str, default='qasper', help="Dataset to evaluate on")
     return parser.parse_args(args)
 
 # This is the customized building prompt for chat models
@@ -78,6 +77,7 @@ def get_pred_single_gpu(data, max_length, max_gen,
     model, tokenizer = load_model_and_tokenizer(model2path[model_name], model_name, device = "cuda", compress=compress)
     device = model.device
     printed = False
+    preds = []
     for json_obj in tqdm(data):
         ############################################################################################################
         # load compress args
@@ -136,9 +136,9 @@ def get_pred_single_gpu(data, max_length, max_gen,
             )[0]
         pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
-        with open(out_path, "a", encoding="utf-8") as f:
-            json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
-            f.write('\n')
+        preds.append({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]})
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(preds, f, ensure_ascii=False, indent = 4)
 
 
 def seed_everything(seed):
@@ -269,26 +269,19 @@ if __name__ == '__main__':
     # define your model
     max_length = model2maxlen[model_name]
     if args.e:
-        datasets = ["qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "gov_report", "multi_news", \
+        datasets = ["2wikimqa", "qasper", "multifieldqa_en", "hotpotqa", "gov_report", "multi_news", \
             "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
     else:
         datasets = ["narrativeqa", "qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "musique", \
             "gov_report", "qmsum", "multi_news", "trec", "triviaqa", "samsum", \
             "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
 
-    # check if args dataset in datasets
-    if args.dataset not in datasets:
-        raise ValueError(f"Dataset {args.dataset} not found in datasets")
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))
     # predict on each dataset
-    if not os.path.exists("pred"):
-        os.makedirs("pred")
     if not os.path.exists("pred_e"):
         os.makedirs("pred_e")
-    dataset = args.dataset
-    # for dataset in datasets:
     if args.compress_args_path:
         compress_args = json.load(open(os.path.join('config', args.compress_args_path), "r"))
         compress = True
@@ -300,20 +293,22 @@ if __name__ == '__main__':
         compress = False
         compress_args = None
         write_model_name = model_name
-    if args.e:
-        data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
-        if not os.path.exists(f"pred_e/{write_model_name}"):
-            os.makedirs(f"pred_e/{write_model_name}")
-        out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
-    else:
-        data = load_dataset('THUDM/LongBench', dataset, split='test')
-        if not os.path.exists(f"pred_e/{write_model_name}"):
-            os.makedirs(f"pred_e/{write_model_name}")
-        out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
-    prompt_format = dataset2prompt[dataset]
-    max_gen = dataset2maxlen[dataset]
-    data_all = [data_sample for data_sample in data]
-    if compress_args is not None:
-        get_pred_single_gpu(data_all, max_length, max_gen, prompt_format, dataset, model_name, model2path, out_path, compress, **compress_args)
-    else:
-        get_pred_single_gpu(data_all, max_length, max_gen, prompt_format, dataset, model_name, model2path, out_path, compress)
+    
+    for dataset in datasets:
+        if args.e:
+            data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
+            if not os.path.exists(f"pred_e/{write_model_name}"):
+                os.makedirs(f"pred_e/{write_model_name}")
+            out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
+        else:
+            data = load_dataset('THUDM/LongBench', dataset, split='test')
+            if not os.path.exists(f"pred_e/{write_model_name}"):
+                os.makedirs(f"pred_e/{write_model_name}")
+            out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
+        prompt_format = dataset2prompt[dataset]
+        max_gen = dataset2maxlen[dataset]
+        data_all = [data_sample for data_sample in data]
+        if compress_args is not None:
+            get_pred_single_gpu(data_all, max_length, max_gen, prompt_format, dataset, model_name, model2path, out_path, compress, **compress_args)
+        else:
+            get_pred_single_gpu(data_all, max_length, max_gen, prompt_format, dataset, model_name, model2path, out_path, compress)
