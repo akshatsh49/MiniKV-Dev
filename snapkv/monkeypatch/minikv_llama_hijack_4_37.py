@@ -148,7 +148,6 @@ def minikv_prepare_inputs_for_generation_llama(
             max_cache_length = past_key_values.get_max_length()
         else:
             # cache_length = past_length = past_key_values[0][0].shape[2]
-            # max_cache_length = None
             cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
             max_cache_length = None
         # Keep only the unprocessed tokens:

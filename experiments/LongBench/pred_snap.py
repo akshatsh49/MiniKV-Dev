@@ -16,7 +16,15 @@ def parse_args(args=None):
         "mistral-7B-instruct-v0.2", "mistral-7B-instruct-v0.1", "llama-2-7B-32k-instruct", "mixtral-8x7B-instruct-v0.1","lwm-text-chat-1m", "lwm-text-1m"])
     parser.add_argument('--compress_args_path', type=str, default=None, help="Path to the compress args")
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
+    parser.add_argument('--full_model', type=lambda x: x.lower() == 'true', help="Use uncompressed model", default=False)
+    parser.add_argument('--prompt_sparsity_ratios', type=float, help="The sparsity ratio of the prompt", default=0.5)
+    parser.add_argument('--window_sizes', type=int, help="The window size of the prompt", default=32)
+    parser.add_argument('--kernel_sizes', type=int, help="The kernel size of the prompt", default=7)
+    parser.add_argument('--pooling', type=str, help="The pooling method of the prompt", default="maxpool")
     return parser.parse_args(args)
+
+def process_decimal_string(str_):
+    return str_.replace(".", "d")
 
 # This is the customized building prompt for chat models
 def build_chat(tokenizer, prompt, model_name):
@@ -34,7 +42,7 @@ def build_chat(tokenizer, prompt, model_name):
         conv.append_message(conv.roles[1], None)
         prompt = conv.get_prompt()
     elif "llama2"  in model_name or "llama-2" in model_name or "lwm" in model_name:
-        print('llama2', model_name)
+        # print('llama2', model_name)
         prompt = f"[INST]{prompt}[/INST]"
     elif "xgen" in model_name:
         print('xgen')
@@ -69,7 +77,7 @@ def get_pred_single_gpu(data, max_length, max_gen,
                         model2path, out_path, 
                         compress=False, 
                         window_sizes = None,
-                        max_capacity_prompts = None,
+                        prompt_sparsity_ratios = None,
                         kernel_sizes = None,
                         pooling = None):
     # device = torch.device(f'cuda:{rank}')
@@ -86,13 +94,13 @@ def get_pred_single_gpu(data, max_length, max_gen,
             # check if window_sizes is a list
             if not isinstance(window_sizes, list):
                 window_sizes = [window_sizes] * layers
-            if not isinstance(max_capacity_prompts, list):
-                max_capacity_prompts = [max_capacity_prompts] * layers
+            if not isinstance(prompt_sparsity_ratios, list):
+                prompt_sparsity_ratios = [prompt_sparsity_ratios] * layers
             if not isinstance(kernel_sizes, list):
                 kernel_sizes = [kernel_sizes] * layers
             for i in range(layers):
                 model.model.layers[i].self_attn.config.window_size = window_sizes[i]
-                model.model.layers[i].self_attn.config.max_capacity_prompt = max_capacity_prompts[i]
+                model.model.layers[i].self_attn.config.prompt_sparsity_ratio = prompt_sparsity_ratios[i]
                 model.model.layers[i].self_attn.config.kernel_size = kernel_sizes[i]
                 model.model.layers[i].self_attn.config.pooling = pooling
         ############################################################################################################
@@ -112,9 +120,6 @@ def get_pred_single_gpu(data, max_length, max_gen,
         else:
             input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
         context_length = input.input_ids.shape[-1]
-        if not printed:
-            print(prompt)
-            printed = True
         if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
             output = model.generate(
                 **input,
@@ -138,8 +143,8 @@ def get_pred_single_gpu(data, max_length, max_gen,
         pred = post_process(pred, model_name)
         preds.append({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]})
         with open(out_path, "w", encoding="utf-8") as f:
-            json.dump(preds, f, ensure_ascii=False, indent = 4)
-
+            for pred in preds:
+                f.write(json.dumps(pred, ensure_ascii=False) + "\n")
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -156,7 +161,7 @@ def load_model_and_tokenizer(path, model_name, device, compress=False):
         model = AutoModelForCausalLM.from_pretrained(path, trust_remote_code=True, torch_dtype=torch.bfloat16).to(device)
     elif "llama2" in model_name:
         tokenizer = AutoTokenizer.from_pretrained(path)
-        model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.bfloat16).to(device)
+        model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.bfloat16, _attn_implementation = 'flash_attention_2').to(device)
     elif "longchat" in model_name or "vicuna" in model_name:
         if not compress:
             model = AutoModelForCausalLM.from_pretrained(
@@ -259,6 +264,7 @@ def load_model_and_tokenizer(path, model_name, device, compress=False):
 if __name__ == '__main__':
     seed_everything(42)
     args = parse_args()
+    print(args)
     # world_size = torch.cuda.device_count()
     # mp.set_start_method('spawn', force=True)
 
@@ -282,10 +288,15 @@ if __name__ == '__main__':
     # predict on each dataset
     if not os.path.exists("pred_e"):
         os.makedirs("pred_e")
-    if args.compress_args_path:
-        compress_args = json.load(open(os.path.join('config', args.compress_args_path), "r"))
+    if not args.full_model:
         compress = True
-        write_model_name = model_name + args.compress_args_path.split(".")[0]
+        compress_args = {
+            "window_sizes": args.window_sizes,
+            "prompt_sparsity_ratios": args.prompt_sparsity_ratios,
+            "kernel_sizes": args.kernel_sizes,
+            "pooling": args.pooling,
+        }
+        write_model_name = model_name + f"_w{args.window_sizes}_p{process_decimal_string(str(args.prompt_sparsity_ratios))}_k{args.kernel_sizes}_pool{args.pooling}"
         replace_llama()
         replace_mistral()
         replace_mixtral()
@@ -294,7 +305,7 @@ if __name__ == '__main__':
         compress_args = None
         write_model_name = model_name
     
-    for dataset in datasets:
+    for dataset in tqdm(datasets):
         if args.e:
             data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
             if not os.path.exists(f"pred_e/{write_model_name}"):
