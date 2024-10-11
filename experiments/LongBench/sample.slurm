@@ -25,6 +25,8 @@ export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
 export PATH=/usr/local/cuda-12.4/bin:$PATH
 export LD_LIBRARY_PATH=/u/asharma13/.conda/envs/snap/lib:$LD_LIBRARY_PATH   # wherever the right libstdc++.so.6 is
 
+export PYTHONPATH=/u/asharma13/ai_efficiency/SnapKV:$PYTHONPATH
+
 conda deactivate
 conda activate snap
 

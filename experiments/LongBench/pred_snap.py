@@ -17,10 +17,22 @@ def parse_args(args=None):
     parser.add_argument('--compress_args_path', type=str, default=None, help="Path to the compress args")
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
     parser.add_argument('--full_model', type=lambda x: x.lower() == 'true', help="Use uncompressed model", default=False)
+    parser.add_argument('--use_snap', type=lambda x: x.lower() == 'true', help="Use snapKV for eviction", default=False)
+    
+    # snapKV args
     parser.add_argument('--prompt_sparsity_ratios', type=float, help="The sparsity ratio of the prompt", default=0.5)
     parser.add_argument('--window_sizes', type=int, help="The window size of the prompt", default=32)
     parser.add_argument('--kernel_sizes', type=int, help="The kernel size of the prompt", default=7)
     parser.add_argument('--pooling', type=str, help="The pooling method of the prompt", default="maxpool")
+    
+    # h2o args
+    parser.add_argument('--heavy_ratio', type=float, help="The ratio of heavy hitter", default=0.25)
+    parser.add_argument('--recent_ratio', type=float, help="The ratio of recent window", default=0.25)
+    
+    # quantization args
+    parser.add_argument('--quant_bits', type=int, help="The number of bits for key/value", default=2)
+    parser.add_argument('--group_size', type=int, help="The group size", default=16)
+    parser.add_argument('--residual_length', type=int, help="The residual length", default=128)
     return parser.parse_args(args)
 
 def process_decimal_string(str_):
@@ -79,7 +91,11 @@ def get_pred_single_gpu(data, max_length, max_gen,
                         window_sizes = None,
                         prompt_sparsity_ratios = None,
                         kernel_sizes = None,
-                        pooling = None):
+                        pooling = None,
+                        quant_bits = None,
+                        group_size = None,
+                        residual_length = None,
+                        ):
     # device = torch.device(f'cuda:{rank}')
     # device = model.device
     model, tokenizer = load_model_and_tokenizer(model2path[model_name], model_name, device = "cuda", compress=compress)
@@ -103,6 +119,9 @@ def get_pred_single_gpu(data, max_length, max_gen,
                 model.model.layers[i].self_attn.config.prompt_sparsity_ratio = prompt_sparsity_ratios[i]
                 model.model.layers[i].self_attn.config.kernel_size = kernel_sizes[i]
                 model.model.layers[i].self_attn.config.pooling = pooling
+                model.model.layers[i].self_attn.config.quant_bits = quant_bits
+                model.model.layers[i].self_attn.config.group_size = group_size
+                model.model.layers[i].self_attn.config.residual_length = residual_length
         ############################################################################################################
         
         prompt = prompt_format.format(**json_obj)
@@ -161,7 +180,7 @@ def load_model_and_tokenizer(path, model_name, device, compress=False):
         model = AutoModelForCausalLM.from_pretrained(path, trust_remote_code=True, torch_dtype=torch.bfloat16).to(device)
     elif "llama2" in model_name:
         tokenizer = AutoTokenizer.from_pretrained(path)
-        model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.bfloat16, _attn_implementation = 'flash_attention_2').to(device)
+        model = AutoModelForCausalLM.from_pretrained(path, torch_dtype = torch.float16, _attn_implementation = 'flash_attention_2').to(device)   # cant use torch_dtype=torch.bfloat16 as kivi's quantization kernels dont support it
     elif "longchat" in model_name or "vicuna" in model_name:
         if not compress:
             model = AutoModelForCausalLM.from_pretrained(
@@ -275,7 +294,7 @@ if __name__ == '__main__':
     # define your model
     max_length = model2maxlen[model_name]
     if args.e:
-        datasets = ["2wikimqa", "qasper", "multifieldqa_en", "hotpotqa", "gov_report", "multi_news", \
+        datasets = ["qasper", "2wikimqa", "multifieldqa_en", "hotpotqa", "gov_report", "multi_news", \
             "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
     else:
         datasets = ["narrativeqa", "qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "musique", \
@@ -295,9 +314,12 @@ if __name__ == '__main__':
             "prompt_sparsity_ratios": args.prompt_sparsity_ratios,
             "kernel_sizes": args.kernel_sizes,
             "pooling": args.pooling,
+            "quant_bits": args.quant_bits,
+            "group_size": args.group_size,
+            "residual_length": args.residual_length,
         }
-        write_model_name = model_name + f"_w{args.window_sizes}_p{process_decimal_string(str(args.prompt_sparsity_ratios))}_k{args.kernel_sizes}_pool{args.pooling}"
-        replace_llama()
+        write_model_name = model_name + f"_w{args.window_sizes}_p{process_decimal_string(str(args.prompt_sparsity_ratios))}_ksize{args.kernel_sizes}_pool{args.pooling}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+        replace_llama(args)
         replace_mistral()
         replace_mixtral()
     else:
