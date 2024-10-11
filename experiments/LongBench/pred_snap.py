@@ -310,15 +310,32 @@ if __name__ == '__main__':
     if not args.full_model:
         compress = True
         compress_args = {
-            "window_sizes": args.window_sizes,
+            "use_snap": args.use_snap,
             "prompt_sparsity_ratios": args.prompt_sparsity_ratios,
+            "window_sizes": args.window_sizes,
             "kernel_sizes": args.kernel_sizes,
             "pooling": args.pooling,
+            "heavy_ratio": args.heavy_ratio,
+            "recent_ratio": args.recent_ratio,
             "quant_bits": args.quant_bits,
             "group_size": args.group_size,
             "residual_length": args.residual_length,
         }
-        write_model_name = model_name + f"_w{args.window_sizes}_p{process_decimal_string(str(args.prompt_sparsity_ratios))}_ksize{args.kernel_sizes}_pool{args.pooling}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+        if args.use_snap and args.quant_bits == 16:
+            # use use_snap, prompt sparsity, window size, kernel size, pooling, in that order
+            write_model_name = model_name + f"use_snap{args.use_snap}_p{args.prompt_sparsity_ratios}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}"
+        
+        elif args.use_snap and args.quant_bits == 2:
+            # use use_snap, prompt sparsity, window size, kernel size, pooling, quant_bits, group_size, residual_length, in that order
+            write_model_name = model_name + f"use_snap{args.use_snap}_p{args.prompt_sparsity_ratios}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+        
+        elif not args.use_snap and args.quant_bits == 2:
+            # use use_snap, heavy_ratio, recent_ratio, quant_bits, group_size, residual_length, in that order
+            write_model_name = model_name + f"use_snap{args.use_snap}_h{args.heavy_ratio}_r{args.recent_ratio}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+        
+        else:
+            raise NotImplementedError(f"This configuration is not supported: {args = }")
+        
         replace_llama(args)
         replace_mistral()
         replace_mixtral()
@@ -338,6 +355,7 @@ if __name__ == '__main__':
             if not os.path.exists(f"pred_e/{write_model_name}"):
                 os.makedirs(f"pred_e/{write_model_name}")
             out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
+        print(f"[INFO] Writing to {out_path = }")
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
         data_all = [data_sample for data_sample in data]
