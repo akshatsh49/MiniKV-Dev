@@ -38,7 +38,7 @@ for idx, (model_name, use_snap, heavy_ratio, recent_ratio, use_eviction_flash, q
     
     # job_content = original + f"CUDA_VISIBLE_DEVICES=0 python3 -u pred_snap.py --model {model_name} --e --full_model False --prompt_sparsity_ratios {ratio} --quant_bits {quant_bit} --group_size {g_size} --residual_length {length}"
     
-    job_content = original + f"CUDA_VISIBLE_DEVICES=0 python3 -u pred_snap.py --model {model_name} --e --full_model False --use_snap {use_snap} --heavy_ratio {heavy_ratio} --recent_ratio {recent_ratio} --use_eviction_flash {use_eviction_flash} --quant_bits {quant_bit} --group_size {g_size} --residual_length {length}"
+    job_content = original + f"TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=0 python3 -u pred_snap.py --model {model_name} --e --full_model False --use_snap {use_snap} --heavy_ratio {heavy_ratio} --recent_ratio {recent_ratio} --use_eviction_flash {use_eviction_flash} --quant_bits {quant_bit} --group_size {g_size} --residual_length {length}"
     
     with open(f"slurm_jobs/job_{idx}.slurm", "w") as f:
         f.write(job_content)
