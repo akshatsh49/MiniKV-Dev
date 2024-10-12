@@ -28,6 +28,7 @@ def parse_args(args=None):
     # h2o args
     parser.add_argument('--heavy_ratio', type=float, help="The ratio of heavy hitter", default=0.25)
     parser.add_argument('--recent_ratio', type=float, help="The ratio of recent window", default=0.25)
+    parser.add_argument('--use_eviction_flash', type=lambda x: x.lower() == 'true', help="Use custom flash_attn kernel which returns the cumulative attention map", default=False)
     
     # quantization args
     parser.add_argument('--quant_bits', type=int, help="The number of bits for key/value", default=2)
@@ -36,6 +37,8 @@ def parse_args(args=None):
     return parser.parse_args(args)
 
 def process_decimal_string(str_):
+    if not isinstance(str_, str):
+        str_ = str(str_)
     return str_.replace(".", "d")
 
 # This is the customized building prompt for chat models
@@ -88,13 +91,17 @@ def get_pred_single_gpu(data, max_length, max_gen,
                         prompt_format, dataset, model_name, 
                         model2path, out_path, 
                         compress=False, 
-                        window_sizes = None,
-                        prompt_sparsity_ratios = None,
-                        kernel_sizes = None,
-                        pooling = None,
-                        quant_bits = None,
-                        group_size = None,
-                        residual_length = None,
+                        use_snap=False,
+                        prompt_sparsity_ratios=None,
+                        window_sizes=None,
+                        kernel_sizes=None,
+                        pooling=None,
+                        heavy_ratio=None,
+                        recent_ratio=None,
+                        use_eviction_flash=None,
+                        quant_bits=None,
+                        group_size=None,
+                        residual_length=None,
                         ):
     # device = torch.device(f'cuda:{rank}')
     # device = model.device
@@ -115,10 +122,14 @@ def get_pred_single_gpu(data, max_length, max_gen,
             if not isinstance(kernel_sizes, list):
                 kernel_sizes = [kernel_sizes] * layers
             for i in range(layers):
-                model.model.layers[i].self_attn.config.window_size = window_sizes[i]
+                model.model.layers[i].self_attn.config.use_snap = use_snap
                 model.model.layers[i].self_attn.config.prompt_sparsity_ratio = prompt_sparsity_ratios[i]
+                model.model.layers[i].self_attn.config.window_size = window_sizes[i]
                 model.model.layers[i].self_attn.config.kernel_size = kernel_sizes[i]
                 model.model.layers[i].self_attn.config.pooling = pooling
+                model.model.layers[i].self_attn.config.heavy_ratio = heavy_ratio
+                model.model.layers[i].self_attn.config.recent_ratio = recent_ratio
+                model.model.layers[i].self_attn.config.use_eviction_flash = use_eviction_flash
                 model.model.layers[i].self_attn.config.quant_bits = quant_bits
                 model.model.layers[i].self_attn.config.group_size = group_size
                 model.model.layers[i].self_attn.config.residual_length = residual_length
@@ -294,7 +305,7 @@ if __name__ == '__main__':
     # define your model
     max_length = model2maxlen[model_name]
     if args.e:
-        datasets = ["qasper", "2wikimqa", "multifieldqa_en", "hotpotqa", "gov_report", "multi_news", \
+        datasets = ["2wikimqa", "qasper", "multifieldqa_en", "hotpotqa", "gov_report", "multi_news", \
             "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
     else:
         datasets = ["narrativeqa", "qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "musique", \
@@ -317,21 +328,22 @@ if __name__ == '__main__':
             "pooling": args.pooling,
             "heavy_ratio": args.heavy_ratio,
             "recent_ratio": args.recent_ratio,
+            "use_eviction_flash": args.use_eviction_flash,
             "quant_bits": args.quant_bits,
             "group_size": args.group_size,
             "residual_length": args.residual_length,
         }
         if args.use_snap and args.quant_bits == 16:
             # use use_snap, prompt sparsity, window size, kernel size, pooling, in that order
-            write_model_name = model_name + f"use_snap{args.use_snap}_p{args.prompt_sparsity_ratios}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}"
+            write_model_name = model_name + f"use_snap{args.use_snap}_p{process_decimal_string(args.prompt_sparsity_ratios)}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}"
         
         elif args.use_snap and args.quant_bits == 2:
             # use use_snap, prompt sparsity, window size, kernel size, pooling, quant_bits, group_size, residual_length, in that order
-            write_model_name = model_name + f"use_snap{args.use_snap}_p{args.prompt_sparsity_ratios}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+            write_model_name = model_name + f"use_snap{args.use_snap}_p{process_decimal_string(args.prompt_sparsity_ratios)}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
         
         elif not args.use_snap and args.quant_bits == 2:
             # use use_snap, heavy_ratio, recent_ratio, quant_bits, group_size, residual_length, in that order
-            write_model_name = model_name + f"use_snap{args.use_snap}_h{args.heavy_ratio}_r{args.recent_ratio}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+            write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
         
         else:
             raise NotImplementedError(f"This configuration is not supported: {args = }")

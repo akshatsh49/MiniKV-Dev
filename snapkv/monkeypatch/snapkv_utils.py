@@ -116,7 +116,7 @@ class SparsityKVCluster():
             value_states = torch.cat([v_past_compress, v_cur], dim = 2)
             return key_states, value_states
 
-class MiniKVCluster():
+class Snap_MiniKVCluster():
     def __init__(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'avgpool', quant_bits = 2, group_size = 16, residual_length = 128):
         self.window_size = window_size
         self.prompt_sparsity_ratio = prompt_sparsity_ratio
@@ -125,7 +125,7 @@ class MiniKVCluster():
         self.quant_bits = quant_bits
         self.group_size = group_size
         self.residual_length = residual_length
-        print(f"[MKV CLUSTER] window_size : {window_size}, prompt_sparsity_ratio : {prompt_sparsity_ratio}, kernel_size : {kernel_size}, pooling : {pooling}, quant_bits : {quant_bits}, group_size : {group_size}, residual_length : {residual_length}")
+        print(f"[Snap_MKV CLUSTER] window_size : {window_size}, prompt_sparsity_ratio : {prompt_sparsity_ratio}, kernel_size : {kernel_size}, pooling : {pooling}, quant_bits : {quant_bits}, group_size : {group_size}, residual_length : {residual_length}")
 
     def reset(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'avgpool'):
         raise NotImplementedError
@@ -164,19 +164,58 @@ class MiniKVCluster():
             value_states = torch.cat([v_past_compress, v_cur], dim = 2)
             return key_states, value_states
 
+class MiniKVCluster():
+    def __init__(self, heavy_ratio = 0.25, recent_ratio = 0.25, quant_bits = 2, group_size = 16, residual_length = 128):
+        self.heavy_ratio = heavy_ratio
+        self.recent_ratio = recent_ratio
+        self.quant_bits = quant_bits
+        self.group_size = group_size
+        self.residual_length = residual_length
+        print(f"[MKV CLUSTER] heavy_ratio : {heavy_ratio}, recent_ratio : {recent_ratio}, quant_bits : {quant_bits}, group_size : {group_size}, residual_length : {residual_length}")
 
+    def reset(self, *args, **kwargs):
+        raise NotImplementedError
+
+    def update_kv(self, key_states, query_states, value_states, cumulative_attn_map):
+        # check if prefix phase
+        assert key_states.shape[-2] == query_states.shape[-2]
+        bsz, num_heads, q_len, head_dim = query_states.shape
+        num_hh = int(q_len * self.heavy_ratio)
+        num_rw = int(q_len * self.recent_ratio)
+        
+        if num_hh + num_rw >= q_len:
+            return key_states, value_states
+        else:
+            hh_score = cumulative_attn_map
+
+            select_hh_scores = hh_score[:, :, :q_len - num_rw]
+            _, keep_topk = torch.topk(select_hh_scores, num_hh, dim=-1)
+            keep_topk = keep_topk.sort().values
+
+            keep_recent = torch.arange(q_len - num_rw, q_len, device=keep_topk.device).repeat(keep_topk.shape[0], keep_topk.shape[1], 1)
+            keep_idx = torch.cat([keep_topk, keep_recent], dim=-1)
+
+            mask = torch.zeros(hh_score.shape, dtype=torch.bool).to(keep_topk.device)
+            mask = mask.scatter(-1, keep_idx, 1)
+            
+            key_states_compress = key_states[mask].view(bsz, num_heads, -1, head_dim)
+            value_states_compress = value_states[mask].view(bsz, num_heads, -1, head_dim)
+            
+            return key_states_compress, value_states_compress
+    
 def init_snapkv(self):
     if not hasattr(self, "kv_cluster"):
         if not hasattr(self.config, 'window_size'):
             self.config.window_size = 32
-        if not hasattr(self.config, 'prompt_sparsity_ratio'):
-            print(f"[WARNING] Loading original snapKV with default max_capacity_prompt = 2048")
-            self.config.max_capacity_prompt = 2048
-            self.kv_cluster = SnapKVCluster( 
-                window_size = self.config.window_size, 
-                max_capacity_prompt = self.config.max_capacity_prompt, 
-                kernel_size = self.config.kernel_size,
-                pooling = self.config.pooling
+        if not self.config.use_snap:
+            assert not self.config.use_snap and hasattr(self.config, 'heavy_ratio')
+            print(f"[INFO] Loading MiniKVCluster")
+            self.kv_cluster = MiniKVCluster(
+                heavy_ratio = self.config.heavy_ratio,
+                recent_ratio = self.config.recent_ratio,
+                quant_bits = self.config.quant_bits,
+                group_size = self.config.group_size,
+                residual_length = self.config.residual_length,
                 )
         else:
             if self.config.quant_bits == 16:
@@ -188,8 +227,8 @@ def init_snapkv(self):
                     pooling = self.config.pooling
                     )
             else :
-                print(f"[INFO] Loading MiniKVCluster")
-                self.kv_cluster = MiniKVCluster(
+                print(f"[INFO] Loading Snap_MiniKVCluster")
+                self.kv_cluster = Snap_MiniKVCluster(
                     window_size = self.config.window_size, 
                     prompt_sparsity_ratio = self.config.prompt_sparsity_ratio, 
                     kernel_size = self.config.kernel_size,
