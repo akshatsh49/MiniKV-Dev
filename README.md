@@ -3,7 +3,6 @@
 Currently tested with `transformers==4.37.0`, need to check if it is compatible with higher version.
 ```
 transformers>=4.36
-flash-attn==2.4.0
 ```
 ## Installation
 ```
