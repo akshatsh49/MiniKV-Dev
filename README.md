@@ -29,23 +29,18 @@ You can follow the comment marked with `[SnapKV]` in [existing models](./snapkv/
 
 The detailed algorithm of SnapKV is in [`snapkv_utils.py`](./snapkv/monkeypatch/snapkv_utils.py)
 
-
-## Partial Results
-![Comprehensive Experiment Results on LongBench](./assets/longbench.jpg)
-![Pressure Test Result on Needle-in-a-Haystack](./assets/LWM-Text-Chat-1M_SnapKV.jpg)
-
-## TODO
-- [ ] Add observation experiments for reduplication.
-- [ ] Add LongBench for reduplication.
-- [ ] Explore the prompt phase compression.
-
-## Citation
-If you feel this project is helpful, please consider cite our report :blush:
+### Running pred_snap.py
+1. To run prompt sparsity ratio based snapKV
+```bash
+python pred_snap.py --model <model_name_or_path> --e --full_model False --use_snap True --prompt_sparsity_ratio 0.4 --quant_bits 16
 ```
-@article{li2024snapkv,
-  title={SnapKV: LLM Knows What You are Looking for Before Generation},
-  author={Li, Yuhong and Huang, Yingbing and Yang, Bowen and Venkitesh, Bharat and Locatelli, Acyr and Ye, Hanchen and Cai, Tianle and Lewis, Patrick and Chen, Deming},
-  journal={arXiv preprint arXiv:2404.14469},
-  year={2024}
-}
+
+2. To run MiniKV: h2o + quantization
+```bash
+python pred_snap.py --model <model_name_or_path> --e --full_model False --use_snap False --heavy_ratio 0.2 --recent_ratio 0.2 --use_eviction_flash False/True --quant_bits 2 --group_size 16 --residual_length 128
+```
+
+3. Uncompressed model
+```bash
+python pred_snap.py --model <model_name_or_path> --e --full_model True
 ```

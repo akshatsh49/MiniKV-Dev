@@ -11,7 +11,7 @@ from snapkv.monkeypatch.monkeypatch import replace_llama, replace_mistral, repla
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=None, choices=[
-        "llama2-7b-chat-4k", "longchat-v1.5-7b-32k", "xgen-7b-8k", 
+        "llama2-7b-chat-4k", "llama2-13b-chat-4k", "longchat-v1.5-7b-32k", "xgen-7b-8k", 
         "internlm-7b-8k", "chatglm2-6b", "chatglm2-6b-32k", "chatglm3-6b-32k", "vicuna-v1.5-7b-16k",
         "mistral-7B-instruct-v0.2", "mistral-7B-instruct-v0.1", "llama-2-7B-32k-instruct", "mixtral-8x7B-instruct-v0.1","lwm-text-chat-1m", "lwm-text-1m"])
     parser.add_argument('--compress_args_path', type=str, default=None, help="Path to the compress args")
@@ -316,6 +316,8 @@ if __name__ == '__main__':
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))
     # predict on each dataset
+    if not os.path.exists("pred") and not args.e:
+        os.makedirs("pred")
     if not os.path.exists("pred_e"):
         os.makedirs("pred_e")
     if not args.full_model:
@@ -349,7 +351,7 @@ if __name__ == '__main__':
             raise NotImplementedError(f"This configuration is not supported: {args = }")
         
         replace_llama(args)
-        replace_mistral()
+        replace_mistral(args)
         replace_mixtral()
     else:
         compress = False
@@ -364,9 +366,9 @@ if __name__ == '__main__':
             out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
         else:
             data = load_dataset('THUDM/LongBench', dataset, split='test')
-            if not os.path.exists(f"pred_e/{write_model_name}"):
-                os.makedirs(f"pred_e/{write_model_name}")
-            out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
+            if not os.path.exists(f"pred/{write_model_name}"):
+                os.makedirs(f"pred/{write_model_name}")
+            out_path = f"pred/{write_model_name}/{dataset}.jsonl"
         print(f"[INFO] Writing to {out_path = }")
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]

@@ -1,0 +1,24 @@
+torch
+torchvision
+numpy==1.26.0
+transformers==4.37.0
+datasets==2.15.0
+accelerate==0.24.1
+urllib3==2.1.0
+bitsandbytes==0.41.2
+chardet==5.2.0
+scipy==1.11.4
+deepdiff==6.7.1
+diffusers==0.8.0
+sentencepiece==0.1.99
+protobuf==4.25.1
+
+jieba
+fuzzywuzzy
+rouge
+IPython
+
+deepspeed==0.14.4
+pytest
+
+# install flash-attn from source 
