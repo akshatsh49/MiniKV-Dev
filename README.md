@@ -9,6 +9,10 @@ transformers>=4.36
 git clone <>
 cd SnapKV
 pip install -r requirements.txt -Uv
+
+# install quant package from KIVI repo
+cd quant
+pip install -e .
 ```
 ## Quick Start
 ### Running pred_snap.py
