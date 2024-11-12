@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import time
 from tqdm import tqdm
 import argparse
-from snapkv.monkeypatch.monkeypatch import replace_llama, replace_mistral, replace_mixtral
+from minikv.monkeypatch.monkeypatch import replace_llama, replace_mistral, replace_mixtral
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()

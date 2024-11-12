@@ -18,7 +18,8 @@ fuzzywuzzy
 rouge
 IPython
 
-deepspeed==0.14.4
+# deepspeed==0.14.4
 pytest
 
-# install flash-attn from source 
+# install flash-attn from source
+flash-attn

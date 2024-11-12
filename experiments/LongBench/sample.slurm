@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=SnapKV
+#SBATCH --job-name=MiniKV
 #SBATCH --partition=gpuA40x4
 #SBATCH --account=bcjw-delta-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
-#SBATCH --time=16:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=slurm_out/%j.out
 #SBATCH --mem=128G # running into OOM error
 #SBATCH --cpus-per-task=16
@@ -23,10 +23,9 @@ export TRANSFORMERS_CACHE=$HF_DATASETS_CACHE
 
 export LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
 export PATH=/usr/local/cuda-12.4/bin:$PATH
-export LD_LIBRARY_PATH=/u/asharma13/.conda/envs/snap/lib:$LD_LIBRARY_PATH   # wherever the right libstdc++.so.6 is
+export LD_LIBRARY_PATH=/u/asharma13/.conda/envs/minikv/lib:$LD_LIBRARY_PATH   # wherever the right libstdc++.so.6 is
 
-export PYTHONPATH=/u/asharma13/ai_efficiency/SnapKV:$PYTHONPATH
+export PYTHONPATH=/u/asharma13/ai_efficiency/MiniKV:$PYTHONPATH
 
 conda deactivate
-conda activate snap
-
+conda activate minikv

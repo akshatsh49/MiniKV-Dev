@@ -11,7 +11,8 @@ from transformers.models.llama.modeling_llama import (
 from transformers.utils import (
     logging,
 )
-from snapkv.monkeypatch.snapkv_utils import init_snapkv
+from minikv.monkeypatch.minikv_utils import init_minikv
+from minikv.monkeypatch.cache_impl import QuantizedCache
 
 import math
 from quant.new_pack import triton_quantize_and_pack_along_last_dim
@@ -38,117 +39,6 @@ def _make_causal_mask(
         mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
     return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
 
-class MKVCache(DynamicCache):
-    '''
-    The kv cache here is (key_code, key_scale, key_mn, key_unq, value_code, value_scale, value_mn, value_unq)
-    '''
-    def __init__(self, quant_bits:int = 2, group_size:int = 16, residual_length:int = 128, num_layers = 32):
-        super().__init__()
-        self.quant_bits = quant_bits
-        self.group_size = group_size
-        self.residual_length = residual_length
-        self.num_layers = num_layers
-        assert self.residual_length % self.group_size == 0, f"residual_length should be divisible by group_size, {self.residual_length = } % {self.group_size = } != 0"
-        
-        self.kv_seq_len = 0
-        self._seen_tokens = 0
-        self.quantized_cache = [{} for i in range(self.num_layers)] # stores quantized/unq KV values
-        # print(f"[INFO] Using MKVCache with quant_bits: {quant_bits}, group_size: {group_size}, residual_length: {residual_length}, num_layers: {num_layers}")
-        
-    def update(
-        self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: int, cache_kwargs: Optional[dict] = None
-    ):
-        '''
-        should return key_code, key_scale, key_mn, key_unq, value_code, value_scale, value_mn, value_unq
-        '''
-        if layer_idx == 0:
-            self._seen_tokens += key_states.shape[-2]
-        
-        # if pre-fill
-        # do quantization of the passed key_states and value_states obtained from pre-fill after eviction
-        if key_states.shape[-2] != 1: # the pre-fill phase
-            num_keys = key_states.shape[-2]
-            if num_keys < self.group_size:
-                key_code, key_scale, key_mn = None, None, None
-                key_unq = key_states
-            else :
-                if num_keys % self.group_size != 0:
-                    key_unq = key_states[:, :, -(num_keys % self.group_size):, :]
-                    key_states_to_quant = key_states[:, :, :-(num_keys % self.group_size), :].transpose(2,3).contiguous()
-                    key_code, key_scale, key_mn = triton_quantize_and_pack_along_last_dim(key_states_to_quant, self.group_size, self.quant_bits)
-                else :
-                    key_code, key_scale, key_mn = triton_quantize_and_pack_along_last_dim(key_states.transpose(2,3).contiguous(), self.group_size, self.quant_bits)
-                    key_unq = None
-                    
-            num_values = value_states.shape[-2]
-            if num_values < self.group_size:
-                value_code, value_scale, value_mn = None, None, None
-                value_unq = value_states
-            else :
-                if num_values % self.group_size != 0:
-                    value_unq = value_states[:, :, -(num_values % self.group_size):, :]
-                    value_states_to_quant = value_states[:, :, :-(num_values % self.group_size), :].contiguous()
-                    value_code, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(value_states_to_quant, self.group_size, self.quant_bits)
-                else :
-                    value_code, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(value_states.contiguous(), self.group_size, self.quant_bits)
-                    value_unq = None
-                    
-            # update cache
-            self.quantized_cache[layer_idx] = {
-                "key_code": key_code, "key_scale": key_scale, "key_mn": key_mn, "key_unq": key_unq,
-                "value_code": value_code, "value_scale": value_scale, "value_mn": value_mn, "value_unq": value_unq
-            }
-        
-        else :  # the generation phase
-            key_code, key_scale, key_mn, key_unq, value_code, value_scale, value_mn, value_unq = self.quantized_cache[layer_idx].values()
-            
-            if key_unq is not None:
-                key_unq = torch.cat([key_unq, key_states], dim = 2)
-            else:
-                key_unq = key_states
-            
-            if key_unq.shape[-2] >= self.residual_length:
-                key_code_new, key_scale_new, key_mn_new = triton_quantize_and_pack_along_last_dim(key_unq.transpose(2,3).contiguous(), self.group_size, self.quant_bits)
-                key_unq = None
-                if key_code is not None:
-                    key_code = torch.cat([key_code, key_code_new], dim = 3)
-                    key_scale = torch.cat([key_scale, key_scale_new], dim = 3)
-                    key_mn = torch.cat([key_mn, key_mn_new], dim = 3)
-                else:
-                    key_code, key_scale, key_mn = key_code_new, key_scale_new, key_mn_new
-                    
-            if value_unq is not None:
-                value_unq = torch.cat([value_unq, value_states], dim = 2)
-            else:
-                value_unq = value_states
-                
-            if value_unq.shape[-2] >= self.residual_length:
-                value_code_new, value_scale_new, value_mn_new = triton_quantize_and_pack_along_last_dim(value_unq.contiguous(), self.group_size, self.quant_bits)
-                value_unq = None
-                if value_code is not None:
-                    value_code = torch.cat([value_code, value_code_new], dim = 2)
-                    value_scale = torch.cat([value_scale, value_scale_new], dim = 2)
-                    value_mn = torch.cat([value_mn, value_mn_new], dim = 2)
-                else:
-                    value_code, value_scale, value_mn = value_code_new, value_scale_new, value_mn_new
-
-            # update cache
-            self.quantized_cache[layer_idx] = {
-                "key_code": key_code, "key_scale": key_scale, "key_mn": key_mn, "key_unq": key_unq,
-                "value_code": value_code, "value_scale": value_scale, "value_mn": value_mn, "value_unq": value_unq
-            }
-            
-        return key_code, key_scale, key_mn, key_unq, value_code, value_scale, value_mn, value_unq
-
-    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-        # return self._seen_tokens if layer_idx == 0 else self._seen_tokens - 1
-        return 0
-    
-    def reset(self):
-        # self._seen_tokens = 0
-        # self.quantized_cache = [{} for i in range(self.num_layers)]
-        raise RuntimeError(f"Shouldn't be calling reset explicitly on MKVCache")
-
 def minikv_llama_flash_attn2_forward(
     self,
     hidden_states: torch.Tensor,
@@ -159,11 +49,10 @@ def minikv_llama_flash_attn2_forward(
     use_cache: bool = False,
     **kwargs,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-    # [SnapKV] register kv_cluster
-    init_snapkv(self)
+    init_minikv(self, layer_id = self.layer_idx, num_layers = self.config.num_hidden_layers)
     
-    if isinstance(past_key_value, DynamicCache) and not isinstance(past_key_value, MKVCache):
-        raise RuntimeError(f"past_key_value should be of type MKVCache, got {type(past_key_value)}")
+    if isinstance(past_key_value, DynamicCache) and not isinstance(past_key_value, QuantizedCache):
+        raise RuntimeError(f"past_key_value should be of type QuantizedCache, got {type(past_key_value)}")
         
     # LlamaFlashAttention2 attention does not support output_attentions
     if "padding_mask" in kwargs:
@@ -199,7 +88,7 @@ def minikv_llama_flash_attn2_forward(
                 "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
                 "with a layer index."
             )
-        if hasattr(self, "kv_seq_len"): #[SnapKV] add kv_seq_len
+        if hasattr(self, "kv_seq_len"):
             if self.kv_seq_len != 0:
                 kv_seq_len += self.kv_seq_len
             else:
@@ -210,15 +99,14 @@ def minikv_llama_flash_attn2_forward(
     cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
     
-    # [SnapKV] move to ahead
     key_states = repeat_kv(key_states, self.num_key_value_groups)
     value_states = repeat_kv(value_states, self.num_key_value_groups)
 
     if past_key_value is not None:
         cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
         # key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-        if key_states.shape[-2] == kv_seq_len: # [SnapKV] add kv_cluster
-            self.kv_seq_len = kv_seq_len # [SnapKV] register kv_seq_len
+        if key_states.shape[-2] == kv_seq_len:
+            self.kv_seq_len = kv_seq_len
             
             if not self.config.use_eviction_flash:
                 attn_weights = torch.matmul(query_states, key_states.transpose(2,3)) / math.sqrt(self.head_dim)
@@ -252,7 +140,7 @@ def minikv_llama_flash_attn2_forward(
                     window_size=(-1,-1),
                     alibi_slopes=None,
                     deterministic=False,
-                    return_attn_probs=False,
+                    return_attn_probs=True,
                 )
                 cumulative_attn_map = cumulative_attn_map[:,:,:,:query_states.shape[2]]
                 cumulative_attn_map = cumulative_attn_map.sum(2)
@@ -319,21 +207,12 @@ def minikv_llama_flash_attn2_forward(
 def minikv_prepare_inputs_for_generation_llama(
     self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
 ):
-    if past_key_values is None: # [SnapKV]
+    if past_key_values is None:
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
-        # make mkvcache instance here
-        past_key_values = MKVCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
+        past_key_values = QuantizedCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
         
     elif past_key_values is not None:
-        # if isinstance(past_key_values, Cache):
-        #     cache_length = past_key_values.get_seq_length()
-        #     past_length = past_key_values.seen_tokens
-        #     max_cache_length = past_key_values.get_max_length()
-        # else:
-        #     # cache_length = past_length = past_key_values[0][0].shape[2]
-        #     cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
-        #     max_cache_length = None
         cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
         max_cache_length = None
             

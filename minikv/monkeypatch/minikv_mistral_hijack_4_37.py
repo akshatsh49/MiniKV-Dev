@@ -13,8 +13,8 @@ from transformers.utils import (
     logging,
     is_flash_attn_2_available,
 )
-from snapkv.monkeypatch.snapkv_utils import init_snapkv
-from snapkv.monkeypatch.minikv_llama_hijack_4_37 import MKVCache
+from minikv.monkeypatch.minikv_utils import init_minikv
+from minikv.monkeypatch.cache_impl import QuantizedCache
 
 import math
 from quant.new_pack import triton_quantize_and_pack_along_last_dim
@@ -51,11 +51,10 @@ def minikv_mistral_flash_attn2_forward(
     use_cache: bool = False,
     **kwargs,
 ):
-    # [SnapKV] register kv_cluster
-    init_snapkv(self)
+    init_minikv(self, layer_id = self.layer_idx, num_layers = self.config.num_hidden_layers)
     
-    if isinstance(past_key_value, DynamicCache) and not isinstance(past_key_value, MKVCache):
-        raise RuntimeError(f"past_key_value should be of type MKVCache, got {type(past_key_value)}")
+    if isinstance(past_key_value, DynamicCache) and not isinstance(past_key_value, QuantizedCache):
+        raise RuntimeError(f"past_key_value should be of type QuantizedCache, got {type(past_key_value)}")
     
     if "padding_mask" in kwargs:
         warnings.warn(
@@ -82,7 +81,7 @@ def minikv_mistral_flash_attn2_forward(
                 "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
                 "with a layer index."
             )
-        if hasattr(self, "kv_seq_len"): #[SnapKV] add kv_seq_len
+        if hasattr(self, "kv_seq_len"):
             if self.kv_seq_len != 0:
                 kv_seq_len += self.kv_seq_len
             else:
@@ -111,13 +110,12 @@ def minikv_mistral_flash_attn2_forward(
             " make sure to upgrade flash-attn library."
         )
     # repeat k/v heads if n_kv_heads < n_heads
-    # [SnapKV] move to ahead
     key_states = repeat_kv(key_states, self.num_key_value_groups)
     value_states = repeat_kv(value_states, self.num_key_value_groups)
 
     if past_key_value is not None:
         cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-        if key_states.shape[-2] >= kv_seq_len: # [SnapKV] add kv_cluster
+        if key_states.shape[-2] >= kv_seq_len:
             self.kv_seq_len = kv_seq_len
             
             if not self.config.use_eviction_flash:
@@ -152,7 +150,7 @@ def minikv_mistral_flash_attn2_forward(
                     window_size=(-1,-1),
                     alibi_slopes=None,
                     deterministic=False,
-                    return_attn_probs=False,
+                    return_attn_probs=True,
                 )
                 cumulative_attn_map = cumulative_attn_map[:,:,:,:query_states.shape[2]]
                 cumulative_attn_map = cumulative_attn_map.sum(2)
@@ -222,7 +220,7 @@ def minikv_prepare_inputs_for_generation_mistral(
     if past_key_values is None:
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
-        past_key_values = MKVCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
+        past_key_values = QuantizedCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
         
     if past_key_values is not None:
         cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len

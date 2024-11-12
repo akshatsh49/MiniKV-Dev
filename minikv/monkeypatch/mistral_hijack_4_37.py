@@ -13,7 +13,7 @@ from transformers.utils import (
     logging,
     is_flash_attn_2_available,
 )
-from snapkv.monkeypatch.snapkv_utils import init_snapkv
+from minikv.monkeypatch.minikv_utils import init_minikv
 
 logger = logging.get_logger(__name__)
 
@@ -32,8 +32,7 @@ def mistral_flash_attn2_forward(
     use_cache: bool = False,
     **kwargs,
 ):
-    # [SnapKV] register kv_cluster
-    init_snapkv(self)
+    init_minikv(self)
     if "padding_mask" in kwargs:
         warnings.warn(
             "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
@@ -67,7 +66,7 @@ def mistral_flash_attn2_forward(
                 "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
                 "with a layer index."
             )
-        if hasattr(self, "kv_seq_len"): #[SnapKV] add kv_seq_len
+        if hasattr(self, "kv_seq_len"):
             if self.kv_seq_len != 0:
                 kv_seq_len += self.kv_seq_len
             else:
@@ -93,7 +92,6 @@ def mistral_flash_attn2_forward(
             " make sure to upgrade flash-attn library."
         )
     # repeat k/v heads if n_kv_heads < n_heads
-    # [SnapKV] move to ahead
     key_states = repeat_kv(key_states, self.num_key_value_groups)
     value_states = repeat_kv(value_states, self.num_key_value_groups)
 
@@ -124,9 +122,9 @@ def mistral_flash_attn2_forward(
                 attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
 
         cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
-        if key_states.shape[-2] >= kv_seq_len: # [SnapKV] add kv_cluster
+        if key_states.shape[-2] >= kv_seq_len:
             self.kv_seq_len = kv_seq_len
-            key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, attention_mask, self.num_key_value_groups)
+            key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states)
             past_key_value.update(key_states_compress, value_states_compress, self.layer_idx, cache_kwargs)
         else:
             self.kv_seq_len += q_len
@@ -162,9 +160,6 @@ def mistral_flash_attn2_forward(
     query_states = query_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
     value_states = value_states.transpose(1, 2)
-    # print('layer id', self.layer_idx, 'query_states', query_states.shape, 'key_states', key_states.shape, 'value_states', value_states.shape, 'kv_seq_len', kv_seq_len, 'dropout_rate', dropout_rate, 'use_sliding_windows', use_sliding_windows)
-    # [SnapKV] change attention_mask to None
-    # print('layer id', self.layer_idx, 'query_states', query_states.shape, 'key_states', key_states.shape, 'value_states', value_states.shape, 'attention_mask', attention_mask.shape, 'kv_seq_len', kv_seq_len, 'dropout_rate', dropout_rate, 'use_sliding_windows', use_sliding_windows)
     attn_output = self._flash_attention_forward(
         query_states,
         key_states,
@@ -196,15 +191,6 @@ def prepare_inputs_for_generation_mistral(
             past_length = past_key_values.seen_tokens
             max_cache_length = past_key_values.get_max_length()
         else:
-            # # cache_length = past_length = past_key_values[0][0].shape[2]
-            # if len(past_key_values) == 0: # [SnapKV] for the first time, past_key_values is empty
-            #     print('fuck')
-            #     for layer in self.model.layers:
-            #         if hasattr(layer, "self_attn"):
-            #             print('yes, layer.self.attn.kv_seq_len exist')
-            #             layer.self_attn.kv_seq_len = 0
-            #     cache_length = past_length = input_ids.shape[1]
-            # else:
             cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
             max_cache_length = None
 
