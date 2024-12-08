@@ -37,6 +37,79 @@ def _make_causal_mask(
         mask = torch.cat([torch.zeros(tgt_len, past_key_values_length, dtype=dtype, device=device), mask], dim=-1)
     return mask[None, None, :, :].expand(bsz, 1, tgt_len, tgt_len + past_key_values_length)
 
+def quantify_quantizability(self, key_tensor, value_tensor, mode = 'prefill'):
+        assert mode in ['prefill', 'generation']
+        # make new logger
+        
+        import logging
+        quant_logger = logging.getLogger(__name__)
+        # set format with level
+        quant_logger.setLevel(logging.INFO)
+        handler = logging.FileHandler('/u/asharma13/ai_efficiency/MiniKV/experiments/LongBench/minikv_quantization.log')
+        formatter = logging.Formatter('[%(levelname)s]: %(message)s')
+        handler.setFormatter(formatter)
+        quant_logger.addHandler(handler)
+        
+        q_len = key_tensor.shape[-2]
+        head_dim = key_tensor.shape[-1]
+        num_heads = key_tensor.shape[1]
+        
+        # truncate length to multiple of group_size
+        if q_len % self.config.group_size != 0:
+            key_tensor = key_tensor[:, :, :-(q_len % self.config.group_size), :]
+            value_tensor = value_tensor[:, :, :-(q_len % self.config.group_size), :]
+        
+        from quant.new_pack import \
+            quant_and_pack_kcache, unpack_and_dequant_kcache, \
+            quant_and_pack_vcache, unpack_and_dequant_vcache
+        
+        def quantize_and_reconstruct(self, tensor, dim):
+            if dim == 'channel':
+                # truncate length to multiple of group_size
+                code, scale, mn = quant_and_pack_kcache(tensor, group_size = self.config.group_size, bits = self.config.quant_bits)
+                recon_tensor = unpack_and_dequant_kcache(code, scale, mn, group_size = self.config.group_size, bits = self.config.quant_bits)
+            elif dim == 'token':
+                code, scale, mn = quant_and_pack_vcache(tensor, group_size = self.config.group_size, bits = self.config.quant_bits)
+                recon_tensor = unpack_and_dequant_vcache(code, scale, mn, group_size = self.config.group_size, bits = self.config.quant_bits)
+            return recon_tensor
+        
+        key_token_recon = quantize_and_reconstruct(self, key_tensor, dim = 'token')
+        key_channel_recon = quantize_and_reconstruct(self, key_tensor, dim = 'channel')
+        value_token_recon = quantize_and_reconstruct(self, value_tensor, dim = 'token')
+        value_channel_recon = quantize_and_reconstruct(self, value_tensor, dim = 'channel')
+        
+        key_token_error = torch.norm(key_tensor - key_token_recon, p = 'fro')
+        key_channel_error = torch.norm(key_tensor - key_channel_recon, p = 'fro')
+        value_token_error = torch.norm(value_tensor - value_token_recon, p = 'fro')
+        value_channel_error = torch.norm(value_tensor - value_channel_recon, p = 'fro')
+        
+        # get percent error of norm
+        key_token_error_percent = (key_token_error / torch.norm(key_tensor, p = 'fro')) * 100
+        key_channel_error_percent = (key_channel_error / torch.norm(key_tensor, p = 'fro')) * 100
+        value_token_error_percent = (value_token_error / torch.norm(value_tensor, p = 'fro')) * 100
+        value_channel_error_percent = (value_channel_error / torch.norm(value_tensor, p = 'fro')) * 100
+        
+        # quant_logger.info(f"[Quantization Error] {mode = }, \033[92m{key_token_error_percent.item() = }\033[0m, \033[93m{key_channel_error_percent.item() = }, {value_token_error_percent.item() = }, {value_channel_error_percent.item() = }\033[0m")
+        quant_logger.info("\n" + "-" * 60)
+        quant_logger.info(f"Mode: {mode}, Layer: {self.layer_idx}")
+        quant_logger.info(f"{'Key Token':20} | {'Key Channel':20}")
+        if key_token_error_percent.item() < key_channel_error_percent.item():
+            quant_logger.info(f"\033[93m{key_token_error_percent.item():20.2f}\033[0m | {key_channel_error_percent.item():20.2f}")
+        else:
+            quant_logger.info(f"{key_token_error_percent.item():20.2f} | \033[93m{key_channel_error_percent.item():20.2f}\033[0m")
+        quant_logger.info(f"{'Value Token':20} | {'Value Channel':20}")
+        if value_token_error_percent.item() < value_channel_error_percent.item():
+            quant_logger.info(f"\033[93m{value_token_error_percent.item():20.2f}\033[0m | {value_channel_error_percent.item():20.2f}")
+        else:
+            quant_logger.info(f"{value_token_error_percent.item():20.2f} | \033[93m{value_channel_error_percent.item():20.2f}\033[0m")
+        quant_logger.info("-" * 60)
+        
+        # close logger
+        quant_logger.removeHandler(handler)
+        handler.close()
+        
+        return
+
 def minikv_llama_flash_attn2_forward(
     self,
     hidden_states: torch.Tensor,
@@ -139,6 +212,9 @@ def minikv_llama_flash_attn2_forward(
                 cumulative_attn_map = cumulative_attn_map.permute(0, 2, 1)
                 
             key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states, cumulative_attn_map)   # only eviction here
+            
+            quantify_quantizability(self, key_states_compress, value_states_compress, mode = 'prefill')
+            
             past_key_value.update(key_states_compress, value_states_compress, self.layer_idx, cache_kwargs) # quantization happens here
             
         else:
