@@ -222,20 +222,19 @@ def quantify_quantizability(self, key_tensor, value_tensor, mode = 'prefill'):
             quant_and_pack_kcache, unpack_and_dequant_kcache, \
             quant_and_pack_vcache, unpack_and_dequant_vcache
         
-        def quantize_and_reconstruct(self, tensor, dim):
+        def quantize_and_reconstruct(self, tensor, dim, bits):
             if dim == 'channel':
-                # truncate length to multiple of group_size
-                code, scale, mn = quant_and_pack_kcache(tensor, group_size = self.config.group_size, bits = self.config.quant_bits)
-                recon_tensor = unpack_and_dequant_kcache(code, scale, mn, group_size = self.config.group_size, bits = self.config.quant_bits)
+                code, scale, mn = quant_and_pack_kcache(tensor, group_size = self.config.group_size, bits = bits)
+                recon_tensor = unpack_and_dequant_kcache(code, scale, mn, group_size = self.config.group_size, bits = bits)
             elif dim == 'token':
-                code, scale, mn = quant_and_pack_vcache(tensor, group_size = self.config.group_size, bits = self.config.quant_bits)
-                recon_tensor = unpack_and_dequant_vcache(code, scale, mn, group_size = self.config.group_size, bits = self.config.quant_bits)
+                code, scale, mn = quant_and_pack_vcache(tensor, group_size = self.config.group_size, bits = bits)
+                recon_tensor = unpack_and_dequant_vcache(code, scale, mn, group_size = self.config.group_size, bits = bits)
             return recon_tensor
         
-        key_token_recon = quantize_and_reconstruct(self, key_tensor, dim = 'token')
-        key_channel_recon = quantize_and_reconstruct(self, key_tensor, dim = 'channel')
-        value_token_recon = quantize_and_reconstruct(self, value_tensor, dim = 'token')
-        value_channel_recon = quantize_and_reconstruct(self, value_tensor, dim = 'channel')
+        key_token_recon = quantize_and_reconstruct(self, key_tensor, dim = 'token', bits = self.config.k_bits)
+        key_channel_recon = quantize_and_reconstruct(self, key_tensor, dim = 'channel', bits = self.config.k_bits)
+        value_token_recon = quantize_and_reconstruct(self, value_tensor, dim = 'token', bits = self.config.v_bits)
+        value_channel_recon = quantize_and_reconstruct(self, value_tensor, dim = 'channel', bits = self.config.v_bits)
         
         key_token_error = torch.norm(key_tensor - key_token_recon, p = 'fro')
         key_channel_error = torch.norm(key_tensor - key_channel_recon, p = 'fro')
@@ -250,17 +249,19 @@ def quantify_quantizability(self, key_tensor, value_tensor, mode = 'prefill'):
         
         
         quant_logger.info("\n" + "-" * 60)
+        quant_logger.info(f"{'K Bits':20} | {'V Bits':20}")
+        quant_logger.info(f"{self.config.k_bits:20} | {self.config.v_bits:20}")
         quant_logger.info(f"Mode: {mode}, Layer: {self.layer_idx}")
         quant_logger.info(f"{'Key Token':20} | {'Key Channel':20}")
         if key_token_error_percent.item() < key_channel_error_percent.item():
-            quant_logger.info(f"\033[93m{key_token_error_percent.item():20.2f}\033[0m | {key_channel_error_percent.item():20.2f}")
+            quant_logger.info(f"\033[93m{key_token_error_percent.item():20.2f}%\033[0m | {key_channel_error_percent.item():20.2f}%")
         else:
-            quant_logger.info(f"{key_token_error_percent.item():20.2f} | \033[93m{key_channel_error_percent.item():20.2f}\033[0m")
+            quant_logger.info(f"{key_token_error_percent.item():20.2f}% | \033[93m{key_channel_error_percent.item():20.2f}%\033[0m")
         quant_logger.info(f"{'Value Token':20} | {'Value Channel':20}")
         if value_token_error_percent.item() < value_channel_error_percent.item():
-            quant_logger.info(f"\033[93m{value_token_error_percent.item():20.2f}\033[0m | {value_channel_error_percent.item():20.2f}")
+            quant_logger.info(f"\033[93m{value_token_error_percent.item():20.2f}%\033[0m | {value_channel_error_percent.item():20.2f}%")
         else:
-            quant_logger.info(f"{value_token_error_percent.item():20.2f} | \033[93m{value_channel_error_percent.item():20.2f}\033[0m")
+            quant_logger.info(f"{value_token_error_percent.item():20.2f}% | \033[93m{value_channel_error_percent.item():20.2f}%\033[0m")
         quant_logger.info("-" * 60)
         
         if self.layer_idx == 31:
@@ -342,7 +343,7 @@ def snap_minikv_llama_flash_attn2_forward(
             self.kv_seq_len = kv_seq_len 
             key_states_compress, value_states_compress = self.kv_cluster.update_kv(key_states, query_states, value_states)   # only eviction here
             
-            quantify_quantizability(self, key_states_compress, value_states_compress, mode = 'prefill')
+            # quantify_quantizability(self, key_states_compress, value_states_compress, mode = 'prefill')
             
             past_key_value.update(key_states_compress, value_states_compress, self.layer_idx, cache_kwargs) # quantization happens here
             
@@ -388,7 +389,7 @@ def snap_minikv_llama_flash_attn2_forward(
             self.kv_seq_len += q_len
             key_code, key_scale, key_mn, key_unq, value_code, value_scale, value_mn, value_unq = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
             
-            attn_weights = get_attn_weights(self.config.group_size, query_states, key_code, key_scale, key_mn, key_unq, self.config.quant_bits, self.head_dim)
+            attn_weights = get_attn_weights(self.config.group_size, query_states, key_code, key_scale, key_mn, key_unq, self.config.k_bits, self.head_dim)
             
             if attention_mask is not None:
                 attn_weights = attn_weights + attention_mask
@@ -397,7 +398,7 @@ def snap_minikv_llama_flash_attn2_forward(
                 )
             attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
 
-            attn_output = get_attn_output(self.config.group_size, attn_weights, value_code, value_scale, value_mn, value_unq, self.config.quant_bits)
+            attn_output = get_attn_output(self.config.group_size, attn_weights, value_code, value_scale, value_mn, value_unq, self.config.v_bits)
             
             if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
                 raise ValueError(
@@ -420,7 +421,11 @@ def snap_minikv_prepare_inputs_for_generation_llama(
     if past_key_values is None:
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
-        past_key_values = QuantizedCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
+        past_key_values = QuantizedCache(k_bits=self.config.k_bits, k_dim=self.config.k_dim,
+                           v_bits=self.config.v_bits, v_dim=self.config.v_dim,
+                           group_size=self.config.group_size, 
+                           residual_length=self.config.residual_length,
+                           num_layers=self.config.num_hidden_layers)
         
     elif past_key_values is not None:
         cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len

@@ -32,7 +32,10 @@ def parse_args(args=None):
     parser.add_argument('--use_eviction_flash', type=lambda x: x.lower() == 'true', help="Use custom flash_attn kernel which returns the cumulative attention map", default=False)
     
     # quantization args
-    parser.add_argument('--quant_bits', type=int, help="The number of bits for key/value", default=2)
+    parser.add_argument('--k_bits', type=int, help="The number of bits for key", default=16)
+    parser.add_argument('--k_dim', type=str, help="The dimension to quantize keys on", default='channel')
+    parser.add_argument('--v_bits', type=int, help="The number of bits for value", default=16)
+    parser.add_argument('--v_dim', type=str, help="The dimension to quantize values on", default='token')
     parser.add_argument('--group_size', type=int, help="The group size", default=16)
     parser.add_argument('--residual_length', type=int, help="The residual length", default=128)
     
@@ -105,7 +108,10 @@ def get_pred_single_gpu(data, max_length, max_gen,
                         recent_ratio=None,
                         eviction_strategy=None,
                         use_eviction_flash=None,
-                        quant_bits=None,
+                        k_bits=None,
+                        k_dim=None,
+                        v_bits=None,
+                        v_dim=None,
                         group_size=None,
                         residual_length=None,
                         ):
@@ -115,7 +121,7 @@ def get_pred_single_gpu(data, max_length, max_gen,
     device = model.device
     printed = False
     preds = []
-    for json_obj in tqdm(data):
+    for idx, json_obj in enumerate(tqdm(data)):
         ############################################################################################################
         # load compress args
         if compress:
@@ -137,7 +143,10 @@ def get_pred_single_gpu(data, max_length, max_gen,
                 model.model.layers[i].self_attn.config.recent_ratio = recent_ratio
                 model.model.layers[i].self_attn.config.eviction_strategy = eviction_strategy
                 model.model.layers[i].self_attn.config.use_eviction_flash = use_eviction_flash
-                model.model.layers[i].self_attn.config.quant_bits = quant_bits
+                model.model.layers[i].self_attn.config.k_bits = k_bits
+                model.model.layers[i].self_attn.config.k_dim = k_dim
+                model.model.layers[i].self_attn.config.v_bits = v_bits
+                model.model.layers[i].self_attn.config.v_dim = v_dim
                 model.model.layers[i].self_attn.config.group_size = group_size
                 model.model.layers[i].self_attn.config.residual_length = residual_length
         ############################################################################################################
@@ -339,21 +348,24 @@ if __name__ == '__main__':
             "recent_ratio": args.recent_ratio,
             "eviction_strategy": args.eviction_strategy,
             "use_eviction_flash": args.use_eviction_flash,
-            "quant_bits": args.quant_bits,
+            "k_bits": args.k_bits,
+            "k_dim": args.k_dim,
+            "v_bits": args.v_bits,
+            "v_dim": args.v_dim,
             "group_size": args.group_size,
             "residual_length": args.residual_length,
         }
         
         if args.use_snap:
-            if args.quant_bits == 16:
+            if args.k_dim == 16 and args.v_dim == 16:
                 write_model_name = model_name + f"use_snap{args.use_snap}_p{process_decimal_string(args.prompt_sparsity_ratios)}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}"
             else:
-                write_model_name = model_name + f"use_snap{args.use_snap}_p{process_decimal_string(args.prompt_sparsity_ratios)}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+                write_model_name = model_name + f"use_snap{args.use_snap}_p{process_decimal_string(args.prompt_sparsity_ratios)}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}_kbits{args.k_bits}_kdim{args.k_dim}_vbits{args.v_bits}_vdim{args.v_dim}_g{args.group_size}_r{args.residual_length}"
         else:
-            if args.quant_bits == 16:
+            if args.k_dim == 16 and args.v_dim == 16:
                 write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}"
             else:
-                write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}_bits{args.quant_bits}_g{args.group_size}_r{args.residual_length}"
+                write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}_kbits{args.k_bits}_kdim{args.k_dim}_vbits{args.v_bits}_vdim{args.v_dim}_g{args.group_size}_r{args.residual_length}"
         
         if args.eviction_strategy == "pyramid":
             write_model_name = "pyramid/" + write_model_name

@@ -93,9 +93,14 @@ class QuantizedCache(DynamicCache):
     '''
     The kv cache here is (key_code, key_scale, key_mn, key_unq, value_code, value_scale, value_mn, value_unq)
     '''
-    def __init__(self, quant_bits:int = 2, group_size:int = 16, residual_length:int = 128, num_layers = 32):
+    def __init__(self, k_bits:int = 2, k_dim:str = 'channel',
+                 v_bits:int = 2, v_dim:str = 'channel',
+                 group_size:int = 16, residual_length:int = 128, num_layers = 32):
         super().__init__()
-        self.quant_bits = quant_bits
+        self.k_bits = k_bits
+        self.k_dim = k_dim
+        self.v_bits = v_bits
+        self.v_dim = v_dim
         self.group_size = group_size
         self.residual_length = residual_length
         self.num_layers = num_layers
@@ -117,26 +122,44 @@ class QuantizedCache(DynamicCache):
                 key_code, key_scale, key_mn = None, None, None
                 key_unq = key_states
             else :
-                if num_keys % self.group_size != 0:
-                    key_unq = key_states[:, :, -(num_keys % self.group_size):, :]
-                    key_states_to_quant = key_states[:, :, :-(num_keys % self.group_size), :].transpose(2,3).contiguous()
-                    key_code, key_scale, key_mn = pack_along_last_dim(key_states_to_quant, self.group_size, self.quant_bits)
-                else :
-                    key_code, key_scale, key_mn = pack_along_last_dim(key_states.transpose(2,3).contiguous(), self.group_size, self.quant_bits)
+                if self.k_dim == 'channel':
+                    if num_keys % self.group_size != 0:
+                        key_states_to_quant = key_states[:, :, :-(num_keys % self.group_size), :].transpose(2,3).contiguous()
+                        key_unq = key_states[:, :, -(num_keys % self.group_size):, :]
+                    else:
+                        key_states_to_quant = key_states.transpose(2,3).contiguous()
+                        key_unq = None
+                    key_code, key_scale, key_mn = pack_along_last_dim(key_states_to_quant, self.group_size, self.k_bits)
+                elif self.k_dim == 'token':
+                    num_keys = key_states.shape[-3]
+                    if num_keys % self.group_size != 0:
+                        key_states_to_quant = key_states[:, :, :, :-(num_keys % self.group_size)].contiguous()
+                    else:
+                        key_states_to_quant = key_states.contiguous()
                     key_unq = None
+                    key_code, key_scale, key_mn = pack_along_last_dim(key_states_to_quant, self.group_size, self.k_bits)
                     
             num_values = value_states.shape[-2]
             if num_values < self.group_size:
                 value_code, value_scale, value_mn = None, None, None
                 value_unq = value_states
             else :
-                if num_values % self.group_size != 0:
-                    value_unq = value_states[:, :, -(num_values % self.group_size):, :]
-                    value_states_to_quant = value_states[:, :, :-(num_values % self.group_size), :].contiguous()
-                    value_code, value_scale, value_mn = pack_along_last_dim(value_states_to_quant, self.group_size, self.quant_bits)
-                else :
-                    value_code, value_scale, value_mn = pack_along_last_dim(value_states.contiguous(), self.group_size, self.quant_bits)
+                if self.v_dim == 'channel':
+                    if num_values % self.group_size != 0:
+                        value_states_to_quant = value_states[:, :, :-(num_values % self.group_size), :].transpose(2,3).contiguous()
+                        value_unq = value_states[:, :, -(num_values % self.group_size):, :]
+                    else:
+                        value_states_to_quant = value_states.transpose(2,3).contiguous()
+                        value_unq = None
+                    value_code, value_scale, value_mn = pack_along_last_dim(value_states_to_quant, self.group_size, self.v_bits)
+                elif self.v_dim == 'token':
+                    num_values = value_states.shape[-3]
+                    if num_values % self.group_size != 0:
+                        value_states_to_quant = value_states[:, :, :, :-(num_values % self.group_size)].contiguous()
+                    else:
+                        value_states_to_quant = value_states.contiguous()
                     value_unq = None
+                    value_code, value_scale, value_mn = pack_along_last_dim(value_states_to_quant, self.group_size, self.v_bits)
                     
             # update cache
             self.quantized_cache[layer_idx] = {
@@ -153,8 +176,12 @@ class QuantizedCache(DynamicCache):
                 key_unq = key_states
             
             if key_unq.shape[-2] >= self.residual_length:
-                key_code_new, key_scale_new, key_mn_new = pack_along_last_dim(key_unq.transpose(2,3).contiguous(), self.group_size, self.quant_bits)
+                if self.k_dim == 'channel':
+                    key_code_new, key_scale_new, key_mn_new = pack_along_last_dim(key_unq.transpose(2,3).contiguous(), self.group_size, self.k_bits)
+                else:
+                    key_code_new, key_scale_new, key_mn_new = pack_along_last_dim(key_unq.contiguous(), self.group_size, self.k_bits)
                 key_unq = None
+                
                 if key_code is not None:
                     key_code = torch.cat([key_code, key_code_new], dim = 3)
                     key_scale = torch.cat([key_scale, key_scale_new], dim = 3)
@@ -168,8 +195,12 @@ class QuantizedCache(DynamicCache):
                 value_unq = value_states
                 
             if value_unq.shape[-2] >= self.residual_length:
-                value_code_new, value_scale_new, value_mn_new = pack_along_last_dim(value_unq.contiguous(), self.group_size, self.quant_bits)
+                if self.v_dim == 'channel':
+                    value_code_new, value_scale_new, value_mn_new = pack_along_last_dim(value_unq.transpose(2,3).contiguous(), self.group_size, self.v_bits)
+                else:
+                    value_code_new, value_scale_new, value_mn_new = pack_along_last_dim(value_unq.contiguous(), self.group_size, self.v_bits)
                 value_unq = None
+                
                 if value_code is not None:
                     value_code = torch.cat([value_code, value_code_new], dim = 2)
                     value_scale = torch.cat([value_scale, value_scale_new], dim = 2)

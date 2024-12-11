@@ -169,7 +169,6 @@ def init_minikv(self, layer_id = None, num_layers = None):
                 raise ValueError(f"Eviction strategy '{self.config.eviction_strategy}' not supported")
             
         else:
-            # assert self.config.eviction_strategy == "uniform", f"SnapKV integration currently supports only uniform eviction strategy and 16-bit quantization, not {self.config.eviction_strategy} and {self.config.quant_bits}"
             assert hasattr(self.config, 'prompt_sparsity_ratio')
             if self.config.eviction_strategy == "uniform":
                 self.kv_cluster = SnapKVSelectionMechanism(
