@@ -363,9 +363,9 @@ if __name__ == '__main__':
                 write_model_name = model_name + f"use_snap{args.use_snap}_p{process_decimal_string(args.prompt_sparsity_ratios)}_w{args.window_sizes}_k{args.kernel_sizes}_pool{args.pooling}_kbits{args.k_bits}_kdim{args.k_dim}_vbits{args.v_bits}_vdim{args.v_dim}_g{args.group_size}_r{args.residual_length}"
         else:
             if args.k_dim == 16 and args.v_dim == 16:
-                write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}"
+                write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}_k{args.kernel_sizes}_pool{args.pooling}"
             else:
-                write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}_kbits{args.k_bits}_kdim{args.k_dim}_vbits{args.v_bits}_vdim{args.v_dim}_g{args.group_size}_r{args.residual_length}"
+                write_model_name = model_name + f"use_snap{args.use_snap}_h{process_decimal_string(args.heavy_ratio)}_r{process_decimal_string(args.recent_ratio)}_use_eviction_flash{args.use_eviction_flash}_kbits{args.k_bits}_kdim{args.k_dim}_vbits{args.v_bits}_vdim{args.v_dim}_g{args.group_size}_r{args.residual_length}_k{args.kernel_sizes}_pool{args.pooling}"
         
         if args.eviction_strategy == "pyramid":
             write_model_name = "pyramid/" + write_model_name

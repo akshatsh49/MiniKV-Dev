@@ -47,7 +47,7 @@ export PYTHONPATH=../../../MiniKV/:$PYTHONPATH
 
    An example
     ```bash
-    python -m pdb pred_minikv.py --model llama2-7b-chat-4k --e --full_model False --use_snap False --heavy_ratio 0.2655 --recent_ratio 0.2655 --eviction_strategy uniform --use_eviction_flash False --k_bits 2 --k_dim channel --v_bits 2 --v_dim token --group_size 16 --residual_length 128
+    python -m pdb pred_minikv.py --model llama2-7b-chat-4k --e --full_model False --use_snap False --heavy_ratio 0.2655 --recent_ratio 0.2655 --eviction_strategy uniform --use_eviction_flash False --k_bits 2 --k_dim channel --v_bits 2 --v_dim token --group_size 16 --residual_length 128 --pooling None
     ```
 
 2. To run snapKV

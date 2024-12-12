@@ -25,7 +25,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 class SnapKVSelectionMechanism():
-    def __init__(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'avgpool'):
+    def __init__(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'maxpool'):
         self.window_size = window_size
         self.prompt_sparsity_ratio = prompt_sparsity_ratio
         self.kernel_size = kernel_size
@@ -69,7 +69,7 @@ class SnapKVSelectionMechanism():
             return key_states, value_states
 
 class PyramidSnapKVSelectionMechanism(SnapKVSelectionMechanism):
-    def __init__(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'avgpool', layer_id = None, num_layers = None):
+    def __init__(self, window_size = 64, prompt_sparsity_ratio = 0.25, kernel_size = 5, pooling = 'maxpool', layer_id = None, num_layers = None):
         self.window_size = window_size
         self.prompt_sparsity_ratio = prompt_sparsity_ratio
         self.kernel_size = kernel_size
@@ -92,10 +92,12 @@ class PyramidSnapKVSelectionMechanism(SnapKVSelectionMechanism):
         logger.info(f"[Pyramid SnapKV Selection Mechanism] {window_size = }, {self.prompt_sparsity_ratio = }, {kernel_size = }, {pooling = }, {layer_id = }, {num_layers = }")
 
 class H2OSelectionMechanism():
-    def __init__(self, heavy_ratio = 0.25, recent_ratio = 0.25):
+    def __init__(self, heavy_ratio = 0.25, recent_ratio = 0.25, kernel_size = 5, pooling = 'maxpool'):
         self.heavy_ratio = heavy_ratio
         self.recent_ratio = recent_ratio
-        logger.info(f"[H2O Selection Mechanism] heavy_ratio : {heavy_ratio}, recent_ratio : {recent_ratio}")
+        self.kernel_size = kernel_size
+        self.pooling = pooling
+        logger.info(f"[H2O Selection Mechanism] heavy_ratio : {heavy_ratio}, recent_ratio : {recent_ratio}, kernel size : {kernel_size}, pooling : {pooling}")
 
     def reset(self, *args, **kwargs):
         raise NotImplementedError
@@ -111,6 +113,11 @@ class H2OSelectionMechanism():
             return key_states, value_states
         else:
             hh_score = cumulative_attn_map
+            
+            if self.pooling == 'maxpool':
+                hh_score = F.max_pool1d(hh_score, kernel_size = self.kernel_size, padding=self.kernel_size//2, stride=1)
+            elif self.pooling == 'avgpool':
+                hh_score = F.avg_pool1d(hh_score, kernel_size = self.kernel_size, padding=self.kernel_size//2, stride=1)
 
             select_hh_scores = hh_score[:, :, :q_len - num_rw]
             _, keep_topk = torch.topk(select_hh_scores, num_hh, dim=-1)
@@ -157,6 +164,8 @@ def init_minikv(self, layer_id = None, num_layers = None):
                 self.kv_cluster = H2OSelectionMechanism(
                     heavy_ratio = self.config.heavy_ratio,
                     recent_ratio = self.config.recent_ratio,
+                    kernel_size=self.config.kernel_size,
+                    pooling=self.config.pooling
                     )
             elif self.config.eviction_strategy == "pyramid":
                 self.kv_cluster = PyramidH2OSelectionMechanism(

@@ -4,7 +4,7 @@
 #SBATCH --account=bcjw-delta-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --nodes=1
-#SBATCH --time=18:00:00
+#SBATCH --time=16:00:00
 #SBATCH --output=slurm_out/%j.out
 #SBATCH --mem=128G # running into OOM error
 #SBATCH --cpus-per-task=16

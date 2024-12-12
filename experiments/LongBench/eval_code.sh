@@ -1,7 +1,7 @@
 # python3 ./eval.py --model llama2-7b-chat-4k
 
 # list directories in pred/
-for dir in $(find pred_e/*use_snapTrue*kbits4* -type d); do
+for dir in $(find pred_e/*use_snapFalse*kbits2*_pool* -type d); do
     echo "Processing $dir"
     dir=${dir#pred_e/}
     python3 ./eval.py --model $dir --e 1>/dev/null 2>&1 & 
