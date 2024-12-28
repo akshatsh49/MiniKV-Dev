@@ -169,8 +169,14 @@ def sparsity_prepare_inputs_for_generation_mistral(
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
     if past_key_values is not None:
-        cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
-        max_cache_length = None
+        if isinstance(past_key_values, Cache):
+            cache_length = past_key_values.get_seq_length()
+            past_length = past_key_values.seen_tokens
+            max_cache_length = past_key_values.get_max_length()
+        else:
+            # cache_length = past_length = past_key_values[0][0].shape[2]
+            cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
+            max_cache_length = None
 
         # Keep only the unprocessed tokens:
         # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
@@ -393,15 +399,21 @@ def snap_minikv_mistral_flash_attn2_forward(
 def snap_minikv_prepare_inputs_for_generation_mistral(
     self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
 ):
-    if past_key_values is None:
+    if past_key_values is None or not isinstance(past_key_values, QuantizedCache):
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
         past_key_values = QuantizedCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
         
     elif past_key_values is not None:
-        cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
-        max_cache_length = None
-            
+        if isinstance(past_key_values, Cache):
+            cache_length = past_key_values.get_seq_length()
+            past_length = past_key_values.seen_tokens
+            max_cache_length = past_key_values.get_max_length()
+        else:
+            # cache_length = past_length = past_key_values[0][0].shape[2]
+            cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
+            max_cache_length = None
+        
         # Keep only the unprocessed tokens:
         # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
         # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as
