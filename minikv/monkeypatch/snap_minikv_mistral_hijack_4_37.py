@@ -13,6 +13,9 @@ from transformers.utils import (
     logging,
     is_flash_attn_2_available,
 )
+from transformers.modeling_flash_attention_utils import FlashAttentionKwargs, _flash_attention_forward
+from transformers.processing_utils import Unpack
+
 from minikv.monkeypatch.minikv_utils import init_minikv
 from minikv.monkeypatch.cache_impl import QuantizedCache
 
@@ -110,7 +113,6 @@ def sparsity_mistral_flash_attn2_forward(
         else:
             self.kv_seq_len += q_len
             key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
-        print("past_key_value: ", past_key_value.shape)
     
     dropout_rate = 0.0 if not self.training else self.attention_dropout
 
@@ -139,14 +141,16 @@ def sparsity_mistral_flash_attn2_forward(
     query_states = query_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
     value_states = value_states.transpose(1, 2)
-    attn_output = self._flash_attention_forward(
+    attn_output = _flash_attention_forward(
         query_states,
         key_states,
         value_states,
         attention_mask,
         q_len,
         dropout=dropout_rate,
-        use_sliding_windows=use_sliding_windows,
+        sliding_window=getattr(self.config, "sliding_window", None),
+        use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        is_causal=self.is_causal,
     )
     if len(attn_output) == 2:
         raise RuntimeError("wrong flash attn kernel picked up")
@@ -326,14 +330,16 @@ def snap_minikv_mistral_flash_attn2_forward(
                 value_states = value_states.to(target_dtype)
 
             # Reashape to the expected shape for Flash Attention
-            attn_output = self._flash_attention_forward(
+            attn_output = _flash_attention_forward(
                 query_states,
                 key_states,
                 value_states,
                 attention_mask,
                 q_len,
                 dropout=dropout_rate,
-                use_sliding_windows=use_sliding_windows,
+                sliding_window=getattr(self.config, "sliding_window", None),
+                use_top_left_mask=self._flash_attn_uses_top_left_mask,
+                is_causal=self.is_causal,
             )
             if len(attn_output) == 2:
                 raise RuntimeError("wrong flash attn kernel picked up")
