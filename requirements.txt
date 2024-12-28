@@ -1,9 +1,9 @@
-torch==2.5.0
-torchvision==0.20.0
+torch==2.4.0
+torchvision==0.19.0
 numpy==1.26.0
 transformers==4.47.1
 datasets==2.15.0
-accelerate==0.24.1
+accelerate==1.2.1
 urllib3==2.1.0
 bitsandbytes==0.41.2
 chardet==5.2.0
@@ -21,7 +21,7 @@ IPython==8.18.1
 # tools for installing flash-attn
 packaging==24.1
 ninja
-triton==3.1.0
+triton==3.0.0
 pytest==8.2.1
 flash_attn
 
