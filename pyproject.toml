@@ -15,7 +15,7 @@ dependencies = [
     "numpy==1.26.0",
     "transformers==4.47.1",
     "datasets==2.15.0",
-    "accelerate==0.24.1",
+    "accelerate==0.26.0",
     "urllib3==2.1.0",
     "bitsandbytes==0.41.2",
     "chardet==5.2.0",
