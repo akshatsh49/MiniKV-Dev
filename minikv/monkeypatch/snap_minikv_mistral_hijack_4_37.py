@@ -13,6 +13,9 @@ from transformers.utils import (
     logging,
     is_flash_attn_2_available,
 )
+from transformers.modeling_flash_attention_utils import FlashAttentionKwargs, _flash_attention_forward
+from transformers.processing_utils import Unpack
+
 from minikv.monkeypatch.minikv_utils import init_minikv
 from minikv.monkeypatch.cache_impl import QuantizedCache
 
@@ -79,11 +82,8 @@ def sparsity_mistral_flash_attn2_forward(
         else:
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
-    # Because the input can be padded, the absolute sequence length depends on the max position id.
-    rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item()) + 1
-    cos, sin = self.rotary_emb(value_states, seq_len=rotary_seq_len)
-
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+    cos, sin = self.rotary_emb(value_states, position_ids)
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
     use_sliding_windows = (
         _flash_supports_window_size
@@ -141,14 +141,16 @@ def sparsity_mistral_flash_attn2_forward(
     query_states = query_states.transpose(1, 2)
     key_states = key_states.transpose(1, 2)
     value_states = value_states.transpose(1, 2)
-    attn_output = self._flash_attention_forward(
+    attn_output = _flash_attention_forward(
         query_states,
         key_states,
         value_states,
         attention_mask,
         q_len,
         dropout=dropout_rate,
-        use_sliding_windows=use_sliding_windows,
+        sliding_window=getattr(self.config, "sliding_window", None),
+        use_top_left_mask=self._flash_attn_uses_top_left_mask,
+        is_causal=self.is_causal,
     )
     if len(attn_output) == 2:
         raise RuntimeError("wrong flash attn kernel picked up")
@@ -169,8 +171,14 @@ def sparsity_prepare_inputs_for_generation_mistral(
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
     if past_key_values is not None:
-        cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
-        max_cache_length = None
+        if isinstance(past_key_values, Cache):
+            cache_length = past_key_values.get_seq_length()
+            past_length = past_key_values.seen_tokens
+            max_cache_length = past_key_values.get_max_length()
+        else:
+            # cache_length = past_length = past_key_values[0][0].shape[2]
+            cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
+            max_cache_length = None
 
         # Keep only the unprocessed tokens:
         # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
@@ -264,9 +272,8 @@ def snap_minikv_mistral_flash_attn2_forward(
         else:
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
-    # Because the input can be padded, the absolute sequence length depends on the max position id.
-    rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item()) + 1
-    cos, sin = self.rotary_emb(value_states, seq_len=rotary_seq_len)
+    cos, sin = self.rotary_emb(value_states, position_ids)
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
     query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
@@ -323,14 +330,16 @@ def snap_minikv_mistral_flash_attn2_forward(
                 value_states = value_states.to(target_dtype)
 
             # Reashape to the expected shape for Flash Attention
-            attn_output = self._flash_attention_forward(
+            attn_output = _flash_attention_forward(
                 query_states,
                 key_states,
                 value_states,
                 attention_mask,
                 q_len,
                 dropout=dropout_rate,
-                use_sliding_windows=use_sliding_windows,
+                sliding_window=getattr(self.config, "sliding_window", None),
+                use_top_left_mask=self._flash_attn_uses_top_left_mask,
+                is_causal=self.is_causal,
             )
             if len(attn_output) == 2:
                 raise RuntimeError("wrong flash attn kernel picked up")
@@ -393,15 +402,21 @@ def snap_minikv_mistral_flash_attn2_forward(
 def snap_minikv_prepare_inputs_for_generation_mistral(
     self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
 ):
-    if past_key_values is None:
+    if past_key_values is None or not isinstance(past_key_values, QuantizedCache):
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
         past_key_values = QuantizedCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
         
     elif past_key_values is not None:
-        cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
-        max_cache_length = None
-            
+        if isinstance(past_key_values, Cache):
+            cache_length = past_key_values.get_seq_length()
+            past_length = past_key_values.seen_tokens
+            max_cache_length = past_key_values.get_max_length()
+        else:
+            # cache_length = past_length = past_key_values[0][0].shape[2]
+            cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
+            max_cache_length = None
+        
         # Keep only the unprocessed tokens:
         # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
         # some of the inputs are exclusively passed as part of the cache (e.g. when passing input_embeds as

@@ -22,7 +22,7 @@ from quant.matmul import cuda_bmm_fA_qB_outer
 
 logger = logging.get_logger(__name__)
 
-from selection_kernel import selection_attention
+#from selection_kernel import selection_attention
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -91,11 +91,8 @@ def minikv_mistral_flash_attn2_forward(
         else:
             kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
 
-    # Because the input can be padded, the absolute sequence length depends on the max position id.
-    # rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item()) + 1
-    cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-
-    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+    cos, sin = self.rotary_emb(value_states, position_ids)
+    query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
 
     use_sliding_windows = (
         _flash_supports_window_size
@@ -214,14 +211,20 @@ def minikv_prepare_inputs_for_generation_mistral(
     self, input_ids, past_key_values=None, attention_mask=None, inputs_embeds=None, **kwargs
 ):
     # Omit tokens covered by past_key_values
-    if past_key_values is None:
+    if past_key_values is None or not isinstance(past_key_values, QuantizedCache):
         for layer in self.model.layers:
             layer.self_attn.kv_seq_len = 0
         past_key_values = QuantizedCache(quant_bits = self.config.quant_bits, group_size = self.config.group_size, residual_length = self.config.residual_length, num_layers = self.config.num_hidden_layers)
         
     if past_key_values is not None:
-        cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
-        max_cache_length = None
+        if isinstance(past_key_values, Cache):
+            cache_length = past_key_values.get_seq_length()
+            past_length = past_key_values.seen_tokens
+            max_cache_length = past_key_values.get_max_length()
+        else:
+            # cache_length = past_length = past_key_values[0][0].shape[2]
+            cache_length = past_length = self.model.layers[0].self_attn.kv_seq_len
+            max_cache_length = None
 
         # Keep only the unprocessed tokens:
         # 1 - If the length of the attention_mask exceeds the length of input_ids, then we are in a setting where
