@@ -11,10 +11,8 @@ from minikv.monkeypatch.monkeypatch import replace_llama, replace_mistral, repla
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=None, choices=[
-        "llama2-7b-chat-4k", "llama2-13b-chat-4k", "llama3-8b-instruct", "longchat-v1.5-7b-32k", "xgen-7b-8k", 
-        "internlm-7b-8k", "chatglm2-6b", "chatglm2-6b-32k", "chatglm3-6b-32k", "vicuna-v1.5-7b-16k",
-        "mistral-7B-instruct-v0.2", "mistral-7B-instruct-v0.1", "llama-2-7B-32k-instruct", "mixtral-8x7B-instruct-v0.1","lwm-text-chat-1m", "lwm-text-1m",
-        "Yarn-llama-2-7b-128k"])
+        "llama2-7b-chat-4k", "llama2-13b-chat-4k", "llama3-8b-instruct", "llama3-3b-instruct", "llama3-1b-instruct",
+        "mistral-7B-instruct-v0.2", "mistral-7B-instruct-v0.1", ])
     parser.add_argument('--compress_args_path', type=str, default=None, help="Path to the compress args")
     parser.add_argument('--e', action='store_true', help="Evaluate on LongBench-E")
     parser.add_argument('--full_model', type=lambda x: x.lower() == 'true', help="Use uncompressed model", default=False)
@@ -194,68 +192,14 @@ def seed_everything(seed):
     torch.cuda.manual_seed_all(seed)
 
 def load_model_and_tokenizer(path, model_name, device, compress=False):
-    if "chatglm" in model_name or "internlm" in model_name or "xgen" in model_name:
-        tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(path, trust_remote_code=True, torch_dtype=torch.bfloat16).to(device)
-    elif "llama2" in model_name or "llama3" in model_name:
-        tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
-        model = AutoModelForCausalLM.from_pretrained(path, trust_remote_code=True, torch_dtype = torch.float16, _attn_implementation = 'flash_attention_2').to(device)   # cant use torch_dtype=torch.bfloat16 as kivi's quantization kernels dont support it
-    elif "longchat" in model_name or "vicuna" in model_name:
-        if not compress:
-            model = AutoModelForCausalLM.from_pretrained(
-                    path,
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    device_map="auto",
-                    use_cache=True,
-                    use_flash_attention_2=True
-                )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                    path,
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    device_map="auto",
-                    use_cache=True,
-                    use_flash_attention_2=True
-                )
-        tokenizer = AutoTokenizer.from_pretrained(
-            path,
-            use_fast=False,
-        )
-    elif "llama-2" in model_name or "lwm" in model_name:
-        if not compress:
-            model = AutoModelForCausalLM.from_pretrained(
-                    path,
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    device_map="auto",
-                    use_cache=True,
-                    use_flash_attention_2=True,
-                    trust_remote_code=True
-                )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                    path,
-                    torch_dtype=torch.float16,
-                    low_cpu_mem_usage=True,
-                    device_map="auto",
-                    use_cache=True,
-                    use_flash_attention_2=True,
-                    trust_remote_code=True
-                )
-        tokenizer = AutoTokenizer.from_pretrained(
-            path,
-            use_fast=False,
-            trust_remote_code=True
-        )
+    if "llama" in model_name:
+        tokenizer = AutoTokenizer.from_pretrained(path)
+        model = AutoModelForCausalLM.from_pretrained(path, torch_dtype = torch.float16, _attn_implementation = 'flash_attention_2').to(device)   # cant use torch_dtype=torch.bfloat16 as kivi's quantization kernels dont support it
     elif "mistral" in model_name:
         if not compress:
             model = AutoModelForCausalLM.from_pretrained(
                 path,
                 torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                device_map="auto",
                 use_cache=True,
                 use_flash_attention_2=True
             )
@@ -263,39 +207,14 @@ def load_model_and_tokenizer(path, model_name, device, compress=False):
             model = AutoModelForCausalLM.from_pretrained(
                 path,
                 torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                device_map="auto",
                 use_cache=True,
                 use_flash_attention_2=True
             )
+        model = model.to(device)
         tokenizer = AutoTokenizer.from_pretrained(
             path,
             padding_side="right",
             use_fast=False,
-        )
-    elif "mixtral" in model_name:
-        if not compress:
-            model = AutoModelForCausalLM.from_pretrained(
-                path,
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                device_map="auto",
-                use_cache=True,
-                use_flash_attention_2=True
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                path,
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-                device_map="auto",
-                use_cache=True,
-                use_flash_attention_2=True
-            )
-        tokenizer = AutoTokenizer.from_pretrained(
-            path,
-            # padding_side="right",
-            # use_fast=False,
         )
     else:
         raise ValueError(f"Model {model_name} not supported!")
@@ -316,8 +235,7 @@ if __name__ == '__main__':
     # define your model
     max_length = model2maxlen[model_name]
     if args.e:
-        datasets = ["2wikimqa", "qasper", "multifieldqa_en", "hotpotqa", "gov_report", "multi_news", \
-            "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
+        datasets = ["gov_report", "multi_news", "narrativeqa", "musique", "qmsum", "2wikimqa", "qasper", "multifieldqa_en", "hotpotqa", "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
     else:
         datasets = ["narrativeqa", "qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "musique", \
             "gov_report", "qmsum", "multi_news", "trec", "triviaqa", "samsum", \
@@ -375,7 +293,11 @@ if __name__ == '__main__':
     
     for dataset in tqdm(datasets):
         if args.e:
-            data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
+            if dataset not in ['narrativeqa', 'musique', 'qmsum']:
+                data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
+            else:
+                data = load_dataset('THUDM/LongBench', dataset, split='test')
+                
             if not os.path.exists(f"pred_e/{write_model_name}"):
                 os.makedirs(f"pred_e/{write_model_name}")
             out_path = f"pred_e/{write_model_name}/{dataset}.jsonl"
