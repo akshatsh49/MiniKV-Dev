@@ -5,8 +5,8 @@ from minikv.monkeypatch.snap_minikv_llama_hijack_4_37 import \
         sparsity_llama_flash_attn2_forward, sparsity_prepare_inputs_for_generation_llama, \
         snap_minikv_llama_flash_attn2_forward, snap_minikv_prepare_inputs_for_generation_llama
 
-from minikv.monkeypatch.minikv_llama_hijack_4_37 import \
-        minikv_llama_flash_attn2_forward, minikv_prepare_inputs_for_generation_llama
+from minikv.monkeypatch.minikv_llama3_hijack_4_37 import \
+        minikv_llama3_flash_attn2_forward, minikv_prepare_inputs_for_generation_llama3, minikv_llama3_sdpa_forward
 
 from minikv.monkeypatch.snap_minikv_mistral_hijack_4_37 import \
     sparsity_mistral_flash_attn2_forward, sparsity_prepare_inputs_for_generation_mistral, \
@@ -41,9 +41,9 @@ def replace_llama(args = None):
     if not args.use_snap:
         if args.quant_bits != 16:
             logger.info(f"Loading MiniKV fwd pass")
-            transformers.models.llama.modeling_llama.LlamaForCausalLM.prepare_inputs_for_generation = minikv_prepare_inputs_for_generation_llama
-            transformers.models.llama.modeling_llama.LlamaFlashAttention2.forward = minikv_llama_flash_attn2_forward
-            transformers.models.llama.modeling_llama.LlamaSdpaAttention.forward = minikv_llama_flash_attn2_forward
+            transformers.models.llama.modeling_llama.LlamaForCausalLM.prepare_inputs_for_generation = minikv_prepare_inputs_for_generation_llama3
+            transformers.models.llama.modeling_llama.LlamaFlashAttention2.forward = minikv_llama3_flash_attn2_forward
+            transformers.models.llama.modeling_llama.LlamaSdpaAttention.forward = minikv_llama3_sdpa_forward
         else:
             raise NotImplementedError(f"This configuration uses H2O during pre-fill and saves all the generated tokens, which is not the original H2O algo (and probably not what you want). Not supported: {args = }")
     
